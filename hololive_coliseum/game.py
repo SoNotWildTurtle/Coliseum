@@ -1768,8 +1768,11 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             self.window_sizes
         )
         self.width, self.height = self.window_sizes[self.window_size_index]
+        self.world_width = self.width
+        self.world_height = self.height
         self.ground_y = self.height - 50
         self.screen = self._apply_display_mode()
+        self._apply_font_scale()
 
     def _cycle_display_mode(self) -> None:
         """Cycle display modes between windowed, borderless, and fullscreen."""
@@ -1780,8 +1783,12 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             if info.current_w and info.current_h:
                 self.width = info.current_w
                 self.height = info.current_h
+                self.world_width = self.width
+                self.world_height = self.height
         self.fullscreen = self.display_mode == "Fullscreen"
+        self.ground_y = self.height - 50
         self.screen = self._apply_display_mode()
+        self._apply_font_scale()
 
     def _cycle_hud_size(self) -> None:
         """Cycle through HUD font sizes and apply immediately."""
@@ -1790,15 +1797,23 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self._apply_font_scale()
 
     def _apply_font_scale(self) -> None:
-        """Apply accessibility font scaling to menu and HUD fonts."""
-        scale = float(self.accessibility_manager.options.get("font_scale", 1.0))
-        scale = max(0.8, min(1.6, scale))
-        self.accessibility_manager.options["font_scale"] = scale
-        self.title_font = pygame.font.SysFont(None, int(64 * scale))
-        self.menu_font = pygame.font.SysFont(None, int(32 * scale))
-        self.autoplay_trace_font = pygame.font.SysFont(None, int(18 * scale))
-        self.small_font = pygame.font.SysFont(None, int(20 * scale))
-        hud_font = pygame.font.SysFont(None, int(self.hud_font_size * scale))
+        """Apply accessibility and resolution-aware scaling to UI fonts."""
+        user_scale = float(self.accessibility_manager.options.get("font_scale", 1.0))
+        user_scale = max(0.8, min(1.6, user_scale))
+        self.accessibility_manager.options["font_scale"] = user_scale
+        baseline = min(self.width / 1280, self.height / 720)
+        resolution_scale = max(0.78, min(1.22, baseline ** 0.35))
+        effective_scale = max(0.72, min(1.85, user_scale * resolution_scale))
+        self.effective_font_scale = effective_scale
+        self.title_font = pygame.font.SysFont(None, max(28, int(64 * effective_scale)))
+        self.menu_font = pygame.font.SysFont(None, max(18, int(32 * effective_scale)))
+        self.autoplay_trace_font = pygame.font.SysFont(
+            None, max(12, int(18 * effective_scale))
+        )
+        self.small_font = pygame.font.SysFont(None, max(14, int(20 * effective_scale)))
+        hud_font = pygame.font.SysFont(
+            None, max(10, int(self.hud_font_size * effective_scale))
+        )
         self.hud_manager = HUDManager(hud_font)
 
     def _sync_player_selection_lists(self) -> None:
@@ -1835,7 +1850,16 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         """Switch between windowed and fullscreen display modes."""
         self.display_mode = "Fullscreen" if not self.fullscreen else "Windowed"
         self.fullscreen = self.display_mode == "Fullscreen"
+        if self.fullscreen:
+            info = pygame.display.Info()
+            if info.current_w and info.current_h:
+                self.width = info.current_w
+                self.height = info.current_h
+        self.world_width = self.width
+        self.world_height = self.height
+        self.ground_y = self.height - 50
         self.screen = self._apply_display_mode()
+        self._apply_font_scale()
 
     def _apply_display_mode(self) -> pygame.Surface:
         """Apply the current window size and fullscreen settings."""
@@ -1845,7 +1869,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         elif self.display_mode == "Borderless":
             flags = pygame.NOFRAME
         else:
-            flags = 0
+            flags = pygame.RESIZABLE
         return pygame.display.set_mode((self.width, self.height), flags, 32)
 
     def _get_arena_backdrop(self) -> pygame.Surface:
@@ -5273,6 +5297,23 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                elif event.type in (
+                    pygame.VIDEORESIZE,
+                    getattr(pygame, "WINDOWSIZECHANGED", pygame.NOEVENT),
+                ):
+                    next_w = int(getattr(event, "w", self.width) or self.width)
+                    next_h = int(getattr(event, "h", self.height) or self.height)
+                    min_w, min_h = 800, 450
+                    next_w = max(min_w, next_w)
+                    next_h = max(min_h, next_h)
+                    if (next_w, next_h) != (self.width, self.height):
+                        self.width, self.height = next_w, next_h
+                        if self.state != "playing":
+                            self.world_width = self.width
+                            self.world_height = self.height
+                        self.ground_y = self.height - 50
+                        self.screen = self._apply_display_mode()
+                        self._apply_font_scale()
                 elif self.state == "splash" and event.type in (
                     pygame.KEYDOWN,
                     pygame.MOUSEBUTTONDOWN,

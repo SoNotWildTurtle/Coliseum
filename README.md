@@ -25,6 +25,8 @@ Hold **Right Shift** to sprint, draining stamina for a brief burst of speed.
 Each defeated foe also grants experience, raising the player's level shown on
 the HUD. Level ups boost attack and max health, supporting long-term MMO
 progression.
+The main menu now uses a responsive layout and resolution-aware font scaling so
+text remains legible from low to high display sizes.
 Every enemy is tagged with a faction, and defeating members of that faction
 earns reputation tracked by the `ReputationManager`. Reputation totals persist
 between sessions and appear on the Records screen, laying groundwork for

@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+# Pygame window config
+*.log
+SavedGames/
+Images/*.png
+!Images/.gitkeep      
+sounds/*
+!sounds/.gitkeep      
+asset_pack/**/*.png
+asset_pack/**/*.ogg
+asset_pack/**/*.wav
+test_nodes*/

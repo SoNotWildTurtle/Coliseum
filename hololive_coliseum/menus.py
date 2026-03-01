@@ -279,15 +279,23 @@ class MenuMixin:
         panel.blit(border, (0, 0))
         self.screen.blit(panel, (inset, inset))
 
-    def _draw_option_label(self, label: str, idx: int, center: tuple[int, int]) -> None:
+    def _draw_option_label(
+        self,
+        label: str,
+        idx: int,
+        center: tuple[int, int],
+        *,
+        font: pygame.font.Font | None = None,
+    ) -> None:
         """Render a menu option with a highlight if selected."""
+        option_font = font or self.menu_font
         palette = self._menu_palette()
         color = (
             palette["text"]
             if idx == self.menu_index
             else palette["text_dim"]
         )
-        text = self.menu_font.render(label, True, color)
+        text = option_font.render(label, True, color)
         rect = text.get_rect(center=center)
         panel_rect = rect.inflate(90, 18)
         panel = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
@@ -346,18 +354,24 @@ class MenuMixin:
                 ],
                 2,
             )
-        shadow = self.menu_font.render(label, True, (20, 20, 20))
+        shadow = option_font.render(label, True, (20, 20, 20))
         self.screen.blit(shadow, (rect.x + 2, rect.y + 2))
         self.screen.blit(text, rect)
 
     def _draw_mmo_option_label(
-        self, label: str, idx: int, center: tuple[int, int]
+        self,
+        label: str,
+        idx: int,
+        center: tuple[int, int],
+        *,
+        font: pygame.font.Font | None = None,
     ) -> None:
         """Render the MMO menu option with a distinct, neon identity."""
+        option_font = font or self.menu_font
         palette = mmo_palette()
         selected = idx == self.menu_index
         color = palette["accent_warm"] if selected else palette["text_dim"]
-        text = self.menu_font.render(label, True, color)
+        text = option_font.render(label, True, color)
         rect = text.get_rect(center=center)
         panel_rect = rect.inflate(100, 22)
         panel = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
@@ -589,11 +603,29 @@ class MenuMixin:
         """Render the main menu with a structured layout."""
         self._draw_background()
         palette = self._menu_palette()
+        menu_scale = float(
+            getattr(
+                self,
+                "effective_font_scale",
+                self.accessibility_manager.options.get("font_scale", 1.0),
+            )
+        )
+        menu_scale = max(0.72, min(1.85, menu_scale))
+        outer_margin = max(20, int(self.width * 0.04))
+        gutter = max(14, int(self.width * 0.02))
         title_y = int(self.height * 0.18)
         title_text = "Hololive Coliseum"
         if getattr(self, "mmo_unlocked", False):
             title_text = "Hololive Coliseum: MMO Command"
         self._draw_title(title_text, (self.width // 2, title_y))
+        subtitle = self.small_font.render(
+            "Adaptive UI scales with your resolution",
+            True,
+            palette["text_dim"],
+        )
+        subtitle_y = min(self.height - 36, title_y + self.title_font.get_height() // 2 + 18)
+        self.screen.blit(subtitle, subtitle.get_rect(center=(self.width // 2, subtitle_y)))
+        menu_top = int(self.height * 0.31)
         if getattr(self, "mmo_unlocked", False):
             mmo_palette_local = mmo_palette()
             ribbon = pygame.Surface((self.width, 54), pygame.SRCALPHA)
@@ -619,10 +651,10 @@ class MenuMixin:
             )
             self.screen.blit(hint, (24, 34))
             mmo_rect = pygame.Rect(
-                int(self.width * 0.14),
-                int(self.height * 0.25),
-                int(self.width * 0.72),
-                90,
+                outer_margin,
+                max(int(self.height * 0.25), 70),
+                self.width - outer_margin * 2,
+                max(84, int(self.height * 0.11)),
             )
             mmo_panel = pygame.Surface(mmo_rect.size, pygame.SRCALPHA)
             mmo_panel.fill((*mmo_palette_local["panel"], 200))
@@ -654,29 +686,63 @@ class MenuMixin:
             ]
             ox = mmo_rect.x + 16
             oy = mmo_rect.y + 42
+            line_height = self.small_font.get_height() + 4
             for item in overview:
                 text = self.small_font.render(
                     item,
                     True,
                     mmo_palette_local["text_dim"],
                 )
+                if ox + text.get_width() > mmo_rect.right - 16:
+                    ox = mmo_rect.x + 16
+                    oy += line_height
+                if oy + text.get_height() > mmo_rect.bottom - 10:
+                    break
                 self.screen.blit(text, (ox, oy))
-                ox += 160
+                ox += text.get_width() + 24
+            menu_top = max(menu_top, mmo_rect.bottom + 18)
         options = list(getattr(self, "main_menu_options", []))
-        base_line_height = self.menu_font.get_height() + 18
-        max_panel_height = int(self.height * 0.54)
-        line_height = max(
-            26,
-            min(base_line_height, int(max_panel_height / max(1, len(options)))),
-        )
-        panel_width = int(self.width * 0.36)
-        panel_height = line_height * len(options) + 30
-        panel_x = self.width // 2 - panel_width // 2
-        if getattr(self, "mmo_unlocked", False):
-            panel_y = int(self.height * 0.38)
+        menu_bottom = self.height - max(20, int(self.height * 0.04))
+        content_height = max(150, menu_bottom - menu_top)
+        content_x = outer_margin
+        content_width = max(320, self.width - outer_margin * 2)
+
+        min_side_width = 170
+        preferred_side = max(min_side_width, int(content_width * 0.23))
+        center_width = content_width - preferred_side * 2 - gutter * 2
+        three_column = center_width >= 300
+        if not three_column:
+            center_width = min(content_width, max(300, int(content_width * 0.68)))
+            center_x = self.width // 2 - center_width // 2
+            side_y = menu_top + int(content_height * 0.6)
+            side_y = min(side_y, menu_bottom - 110)
+            center_height = max(150, side_y - menu_top - 10)
+            side_height = max(100, menu_bottom - side_y)
+            half_width = (content_width - gutter) // 2
+            if half_width >= 220:
+                info_rect = pygame.Rect(content_x, side_y, half_width, side_height)
+                setup_rect = pygame.Rect(
+                    content_x + half_width + gutter, side_y, half_width, side_height
+                )
+            else:
+                card_height = max(88, (side_height - 10) // 2)
+                info_rect = pygame.Rect(content_x, side_y, content_width, card_height)
+                setup_rect = pygame.Rect(
+                    content_x,
+                    side_y + card_height + 10,
+                    content_width,
+                    card_height,
+                )
+                center_height = max(130, info_rect.y - menu_top - 10)
         else:
-            panel_y = int(self.height * 0.35)
-        panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
+            side_width = preferred_side
+            center_x = content_x + side_width + gutter
+            center_height = content_height
+            info_rect = pygame.Rect(content_x, menu_top, side_width, content_height)
+            setup_rect = pygame.Rect(
+                center_x + center_width + gutter, menu_top, side_width, content_height
+            )
+        panel_rect = pygame.Rect(center_x, menu_top, center_width, center_height)
         panel = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
         panel.fill((12, 20, 34, 190))
         pygame.draw.rect(panel, palette["border"], panel.get_rect(), 2)
@@ -688,23 +754,60 @@ class MenuMixin:
             2,
         )
         self.screen.blit(panel, panel_rect)
-        for i, opt in enumerate(options):
-            center = (panel_rect.centerx, panel_rect.y + 20 + i * line_height)
+
+        base_option_size = max(15, int(31 * menu_scale))
+        min_option_size = 12
+        option_font = self.menu_font
+        line_padding = max(6, int(10 * menu_scale))
+        line_height = option_font.get_height() + line_padding
+        if options:
+            for size in range(base_option_size, min_option_size - 1, -1):
+                candidate = pygame.font.SysFont(None, size)
+                candidate_padding = max(6, int(size * 0.32))
+                candidate_line = candidate.get_height() + candidate_padding
+                candidate_height = candidate_line * len(options) + 24
+                widest = max(candidate.size(opt)[0] for opt in options)
+                if (
+                    candidate_height <= panel_rect.height - 8
+                    and widest + 120 <= panel_rect.width - 12
+                ):
+                    option_font = candidate
+                    line_height = candidate_line
+                    break
+
+        visible_options = list(options)
+        visible_start = 0
+        max_visible = max(1, (panel_rect.height - 24) // max(1, line_height))
+        if len(options) > max_visible:
+            visible_start = max(0, self.menu_index - max_visible // 2)
+            visible_start = min(visible_start, len(options) - max_visible)
+            visible_options = options[visible_start:visible_start + max_visible]
+
+        total_options_height = line_height * len(visible_options)
+        start_y = panel_rect.y + max(14, (panel_rect.height - total_options_height) // 2)
+        if visible_start > 0:
+            up_hint = self.small_font.render("^", True, palette["text_dim"])
+            self.screen.blit(
+                up_hint,
+                up_hint.get_rect(center=(panel_rect.centerx, panel_rect.y + 10)),
+            )
+        if visible_start + len(visible_options) < len(options):
+            down_hint = self.small_font.render("v", True, palette["text_dim"])
+            self.screen.blit(
+                down_hint,
+                down_hint.get_rect(center=(panel_rect.centerx, panel_rect.bottom - 10)),
+            )
+        for draw_idx, opt in enumerate(visible_options):
+            i = visible_start + draw_idx
+            center = (
+                panel_rect.centerx,
+                start_y + draw_idx * line_height + line_height // 2,
+            )
             if opt == "MMO":
-                self._draw_mmo_option_label(opt, i, center)
+                self._draw_mmo_option_label(opt, i, center, font=option_font)
             else:
-                self._draw_option_label(opt, i, center)
-        info_width = int(self.width * 0.26)
-        info_height = int(self.height * 0.42)
-        info_x = int(self.width * 0.08)
-        info_y = int(self.height * 0.34)
-        info_rect = pygame.Rect(info_x, info_y, info_width, info_height)
-        info_panel = pygame.Surface(info_rect.size, pygame.SRCALPHA)
-        info_panel.fill((14, 20, 32, 185))
-        pygame.draw.rect(info_panel, palette["border"], info_panel.get_rect(), 2)
-        self.screen.blit(info_panel, info_rect)
-        label = self.menu_font.render("Arena Brief", True, MENU_TEXT_COLOR)
-        self.screen.blit(label, (info_rect.x + 18, info_rect.y + 16))
+                self._draw_option_label(opt, i, center, font=option_font)
+
         lines = []
         difficulty = "n/a"
         if hasattr(self, "difficulty_levels"):
@@ -726,22 +829,6 @@ class MenuMixin:
         lines.append(f"MMO: {'Unlocked' if mmo_unlocked else 'Locked'}")
         if getattr(self, "mmo_plan_summary", ""):
             lines.append("Auto-Dev: Active")
-        text_y = info_rect.y + 54
-        for line in lines:
-            text = self.small_font.render(line, True, (200, 215, 220))
-            self.screen.blit(text, (info_rect.x + 18, text_y))
-            text_y += 22
-        setup_width = info_width
-        setup_height = int(self.height * 0.42)
-        setup_x = self.width - setup_width - int(self.width * 0.08)
-        setup_y = info_y
-        setup_rect = pygame.Rect(setup_x, setup_y, setup_width, setup_height)
-        setup_panel = pygame.Surface(setup_rect.size, pygame.SRCALPHA)
-        setup_panel.fill((14, 20, 32, 185))
-        pygame.draw.rect(setup_panel, palette["border"], setup_panel.get_rect(), 2)
-        self.screen.blit(setup_panel, setup_rect)
-        setup_label = self.menu_font.render("Game Setup", True, MENU_TEXT_COLOR)
-        self.screen.blit(setup_label, (setup_rect.x + 18, setup_rect.y + 16))
         setup_lines = [
             f"Mode: {getattr(self, 'selected_mode', 'n/a')}",
             f"Map: {getattr(self, 'selected_map', 'n/a')}",
@@ -751,11 +838,52 @@ class MenuMixin:
             f"Mob Waves: {'On' if getattr(self, 'match_mobs', False) else 'Off'}",
             f"Account: {getattr(self, 'account_id', 'player')}",
         ]
-        setup_y_text = setup_rect.y + 54
-        for line in setup_lines:
-            text = self.small_font.render(line, True, (200, 215, 220))
-            self.screen.blit(text, (setup_rect.x + 18, setup_y_text))
-            setup_y_text += 22
+
+        def draw_side_panel(rect: pygame.Rect, heading: str, items: list[str]) -> None:
+            panel_surface = pygame.Surface(rect.size, pygame.SRCALPHA)
+            panel_surface.fill((14, 20, 32, 185))
+            pygame.draw.rect(panel_surface, palette["border"], panel_surface.get_rect(), 2)
+            self.screen.blit(panel_surface, rect)
+            heading_font = self.menu_font
+            if heading_font.size(heading)[0] > rect.width - 32:
+                heading_font = self.small_font
+            heading_text = heading_font.render(heading, True, MENU_TEXT_COLOR)
+            self.screen.blit(heading_text, (rect.x + 16, rect.y + 14))
+
+            line_font = self.small_font
+            base_small_size = max(14, int(20 * menu_scale))
+            for size in range(base_small_size, 13, -1):
+                candidate = pygame.font.SysFont(None, size)
+                gap = candidate.get_height() + 4
+                needed_height = 52 + gap * len(items)
+                max_width = max((candidate.size(item)[0] for item in items), default=0)
+                if needed_height <= rect.height - 10 and max_width <= rect.width - 32:
+                    line_font = candidate
+                    break
+
+            line_gap = line_font.get_height() + 4
+            text_y = rect.y + 48
+            visible_count = max(1, (rect.height - 56) // max(1, line_gap))
+            visible_lines = list(items[:visible_count])
+            if len(items) > visible_count and visible_lines:
+                visible_lines[-1] = "..."
+            for line in visible_lines:
+                text = line_font.render(line, True, (200, 215, 220))
+                self.screen.blit(text, (rect.x + 16, text_y))
+                text_y += line_gap
+
+        draw_side_panel(info_rect, "Arena Brief", lines)
+        draw_side_panel(setup_rect, "Game Setup", setup_lines)
+        status_label = self.small_font.render(
+            f"{self.width}x{self.height}  Font {int(menu_scale * 100)}%",
+            True,
+            palette["text_dim"],
+        )
+        status_rect = status_label.get_rect(
+            right=self.width - outer_margin,
+            bottom=self.height - max(8, outer_margin // 2),
+        )
+        self.screen.blit(status_label, status_rect)
         self._draw_input_prompt("Use arrows + Enter/Space to select")
         self._draw_border()
 

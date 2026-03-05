@@ -8,6 +8,7 @@ import math
 import pygame
 
 from .ui_debug import UIDebugger
+from .ui_layout import inset_rect, place
 from .ui_metrics import UIMetrics
 
 
@@ -130,14 +131,22 @@ class HUDManager:
         top_gap = metrics.pad(80) if metrics else 80
         gutter = metrics.gutter if metrics else 10
         screen_bounds = pygame.Rect(0, 0, screen.get_width(), screen.get_height())
-        safe_bounds = pygame.Rect(
-            gutter,
-            gutter,
-            max(0, screen.get_width() - gutter * 2),
-            max(0, screen.get_height() - gutter * 2),
-        )
+        safe_bounds = inset_rect(screen_bounds, gutter, gutter, gutter, gutter)
         self._debug_collect("hud.screen_bounds", screen_bounds, "bounds")
         self._debug_collect("hud.safe_bounds", safe_bounds, "bounds", bounds=screen_bounds)
+        self._debug_collect("hud.content_bounds", safe_bounds, "bounds", bounds=screen_bounds)
+        self._debug_collect("hud.main_panel", safe_bounds, "panel", bounds=screen_bounds)
+        header_h = max(40, top_gap // 2)
+        footer_h = max(60, self.metrics.pad(120) if self.metrics else 120)
+        header_rect = pygame.Rect(safe_bounds.x, safe_bounds.y, safe_bounds.width, min(header_h, safe_bounds.height))
+        footer_rect = pygame.Rect(
+            safe_bounds.x,
+            max(safe_bounds.y, safe_bounds.bottom - footer_h),
+            safe_bounds.width,
+            min(footer_h, safe_bounds.height),
+        )
+        self._debug_collect("hud.header", header_rect, "panel", bounds=safe_bounds)
+        self._debug_collect("hud.footer", footer_rect, "panel", bounds=safe_bounds)
         player.draw_status(screen)
         if allies:
             self._draw_allies_panel(screen, allies)
@@ -156,8 +165,15 @@ class HUDManager:
             overlay.fill((255, 0, 0, 60))
             screen.blit(overlay, (0, 0))
         timer_label = f"Time: {elapsed}"
-        timer_x = screen.get_width() - (metrics.pad(120) if metrics else 120)
-        timer_y = hud_pad
+        timer_rect = place(
+            safe_bounds,
+            metrics.pad(120) if metrics else 120,
+            self.font.get_height(),
+            anchor="tr",
+            dy=0,
+        )
+        timer_x = timer_rect.x
+        timer_y = timer_rect.y
         self._draw_text(screen, timer_label, (255, 255, 255), (timer_x, timer_y))
         timer_size = self.font.size(timer_label)
         timer_rect = pygame.Rect(timer_x, timer_y, timer_size[0], timer_size[1])
@@ -354,11 +370,13 @@ class HUDManager:
         now = pygame.time.get_ticks()
         width = 190
         height = 20 + 18 * len(summary)
-        rect = pygame.Rect(
-            screen.get_width() - width - 10,
-            40,
+        rect = place(
+            pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
             width,
             height,
+            anchor="tr",
+            dx=-(self.metrics.panel_pad if self.metrics else 10),
+            dy=self.metrics.pad(40) if self.metrics else 40,
         )
         pulse = (math.sin(now / 900) + 1) * 0.5
         self._draw_panel(
@@ -400,7 +418,14 @@ class HUDManager:
         base_g = int(200 - 120 * ratio)
         accent = (base_r, base_g, 90)
         border = (min(255, base_r + 30), min(255, base_g + 30), 120)
-        rect = pygame.Rect(screen.get_width() - 210, 38, 200, 36)
+        rect = place(
+            pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+            200,
+            36,
+            anchor="tr",
+            dx=-(self.metrics.panel_pad if self.metrics else 10),
+            dy=self.metrics.pad(38) if self.metrics else 38,
+        )
         pulse = (math.sin(pygame.time.get_ticks() / 700) + 1) * 0.5
         self._draw_panel(
             screen,
@@ -458,11 +483,13 @@ class HUDManager:
         now = pygame.time.get_ticks()
         width = 200
         height = 20 + 18 * len(lines)
-        rect = pygame.Rect(
-            screen.get_width() - width - 10,
-            max(0, screen.get_height() - height - 10),
+        rect = place(
+            pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
             width,
             height,
+            anchor="br",
+            dx=-(self.metrics.panel_pad if self.metrics else 10),
+            dy=-(self.metrics.panel_pad if self.metrics else 10),
         )
         pulse = (math.sin(now / 850) + 1) * 0.5
         self._draw_panel(
@@ -499,7 +526,13 @@ class HUDManager:
             return
         width = 260
         height = 18 * len(lines) + 12
-        rect = pygame.Rect((screen.get_width() - width) // 2, 36, width, height)
+        rect = place(
+            pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+            width,
+            height,
+            anchor="tc",
+            dy=self.metrics.pad(36) if self.metrics else 36,
+        )
         now = pygame.time.get_ticks()
         pulse = (math.sin(now / 1100) + 1) * 0.5
         self._draw_panel(
@@ -538,14 +571,16 @@ class HUDManager:
             return
         width = 210
         height = 20 + 18 * len(summary)
-        top = 40
+        top = self.metrics.pad(40) if self.metrics else 40
         if anchor is not None:
-            top = anchor.bottom + 10
-        rect = pygame.Rect(
-            screen.get_width() - width - 10,
-            top,
+            top = anchor.bottom + (self.metrics.panel_pad if self.metrics else 10)
+        rect = place(
+            pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
             width,
             height,
+            anchor="tr",
+            dx=-(self.metrics.panel_pad if self.metrics else 10),
+            dy=top,
         )
         now = pygame.time.get_ticks()
         pulse = (math.sin(now / 1000) + 1) * 0.5
@@ -583,12 +618,16 @@ class HUDManager:
             return
         text = "  |  ".join(str(line) for line in lines)
         render = self.font.render(text, True, (240, 245, 255))
-        padding = 8
+        padding = self.metrics.pad(8) if self.metrics else 8
         width = render.get_width() + padding * 2
         height = render.get_height() + padding * 2
-        x = max(10, (screen.get_width() - width) // 2)
-        y = max(0, screen.get_height() - height - 70)
-        rect = pygame.Rect(x, y, width, height)
+        rect = place(
+            pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+            width,
+            height,
+            anchor="bc",
+            dy=-(self.metrics.pad(70) if self.metrics else 70),
+        )
         now = pygame.time.get_ticks()
         pulse = (math.sin(now / 950) + 1) * 0.5
         self._draw_panel(
@@ -628,11 +667,16 @@ class HUDManager:
         self, screen: pygame.Surface, meter: float, label: str
     ) -> None:
         meter = max(0.0, min(1.0, meter))
-        x = 10
-        y = 38
         width = 120
         height = 34
-        rect = pygame.Rect(x, y, width, height)
+        rect = place(
+            pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+            width,
+            height,
+            anchor="tl",
+            dx=self.metrics.panel_pad if self.metrics else 10,
+            dy=self.metrics.pad(38) if self.metrics else 38,
+        )
         now = pygame.time.get_ticks()
         pulse = (math.sin(now / 600) + 1) * 0.5
         self._draw_panel(
@@ -673,11 +717,17 @@ class HUDManager:
             return
         width = 210
         height = 24 + 18 * len(items)
-        x = 12
-        y = screen.get_height() - height - 18
+        y = screen.get_height() - height - (self.metrics.pad(18) if self.metrics else 18)
         if anchor is not None:
-            y = anchor.top - height - 12
-        rect = pygame.Rect(x, max(10, y), width, height)
+            y = anchor.top - height - (self.metrics.panel_pad if self.metrics else 12)
+        rect = place(
+            pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+            width,
+            height,
+            anchor="bl",
+            dx=self.metrics.pad(12) if self.metrics else 12,
+            dy=-(screen.get_height() - max(10, y) - height),
+        )
         now = pygame.time.get_ticks()
         pulse = (math.sin(now / 900) + 1) * 0.5
         self._draw_panel(
@@ -728,8 +778,15 @@ class HUDManager:
     ) -> pygame.Rect:
         """Render a compact arena minimap in the lower-left corner."""
         size = 120
-        margin = 12
-        rect = pygame.Rect(margin, screen.get_height() - size - margin, size, size)
+        margin = self.metrics.pad(12) if self.metrics else 12
+        rect = place(
+            pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+            size,
+            size,
+            anchor="bl",
+            dx=margin,
+            dy=-margin,
+        )
         now = pygame.time.get_ticks()
         pulse = (math.sin(now / 800) + 1) * 0.5
         self._draw_panel(

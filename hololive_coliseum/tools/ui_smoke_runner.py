@@ -6,6 +6,12 @@ python -m hololive_coliseum.tools.ui_smoke_runner ^
   --font-scale 0.9 --font-scale 1.0 --font-scale 1.25 ^
   --mode all --frames 60 ^
   --output-dir SavedGames/ui_smoke/sweep_YYYYMMDD_HHMMSS
+
+Stress config:
+python -m hololive_coliseum.tools.ui_smoke_runner ^
+  --res 1024x576 --font-scale 1.25 ^
+  --mode all --frames 60 --ui-debug ^
+  --output-dir SavedGames/ui_smoke/stress_YYYYMMDD_HHMMSS
 """
 
 from __future__ import annotations

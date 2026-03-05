@@ -7,6 +7,8 @@ from typing import Iterable
 import pygame
 import math
 
+from .ui_layout import inset_rect, place, truncate_text
+
 
 def mmo_palette() -> dict[str, tuple[int, int, int]]:
     """Return the shared MMO hub palette."""
@@ -30,10 +32,15 @@ def draw_mmo_backdrop(game) -> None:
     """Draw the MMO hub background with gradient and subtle grid."""
     palette = mmo_palette()
     width, height = game.width, game.height
+    metrics = getattr(game, "ui_metrics", None)
+    gutter = int(getattr(metrics, "gutter", 12))
+    screen_bounds = pygame.Rect(0, 0, width, height)
+    safe_bounds = inset_rect(screen_bounds, gutter, gutter, gutter, gutter)
     debugger = getattr(game, "ui_debugger", None)
     if debugger is not None and debugger.is_active:
-        bounds = pygame.Rect(0, 0, width, height)
-        debugger.collect_rect("mmo.backdrop", bounds, "panel", meta={"bounds": bounds})
+        debugger.collect_rect("mmo.screen_bounds", screen_bounds, "bounds")
+        debugger.collect_rect("mmo.safe_bounds", safe_bounds, "bounds", meta={"bounds": screen_bounds})
+        debugger.collect_rect("mmo.content_bounds", safe_bounds, "bounds", meta={"bounds": screen_bounds})
     top = palette["bg_top"]
     bottom = palette["bg_bottom"]
     for y in range(height):
@@ -73,14 +80,17 @@ def draw_mmo_header(
 ) -> None:
     """Render the MMO hub top bar with title and status."""
     palette = mmo_palette()
+    metrics = getattr(game, "ui_metrics", None)
+    pad = int(getattr(metrics, "panel_pad", 16))
+    line_gap = int(getattr(metrics, "title_gap", 18))
     now = pygame.time.get_ticks()
-    bar_height = 64
+    bar_height = metrics.pad(64) if metrics else 64
     bar = pygame.Surface((game.width, bar_height), pygame.SRCALPHA)
     debugger = getattr(game, "ui_debugger", None)
     if debugger is not None and debugger.is_active:
         header_rect = pygame.Rect(0, 0, game.width, bar_height)
         debugger.collect_rect(
-            "mmo.header_bar",
+            "mmo.header",
             header_rect,
             "panel",
             meta={"bounds": pygame.Rect(0, 0, game.width, game.height)},
@@ -110,16 +120,34 @@ def draw_mmo_header(
     )
     game.screen.blit(bar, (0, 0))
     title_render = game.menu_font.render(title, True, palette["text"])
-    game.screen.blit(title_render, (24, 12))
+    title_pos = place(
+        pygame.Rect(0, 0, game.width, bar_height),
+        title_render.get_width(),
+        title_render.get_height(),
+        anchor="tl",
+        dx=pad,
+        dy=metrics.pad(12) if metrics else 12,
+    )
+    game.screen.blit(title_render, title_pos.topleft)
     subtitle_render = game.small_font.render(subtitle, True, palette["text_dim"])
-    game.screen.blit(subtitle_render, (24, 40))
-    x = game.width - 24
+    subtitle_pos = place(
+        pygame.Rect(0, 0, game.width, bar_height),
+        subtitle_render.get_width(),
+        subtitle_render.get_height(),
+        anchor="tl",
+        dx=pad,
+        dy=bar_height - subtitle_render.get_height() - max(4, line_gap // 2),
+    )
+    game.screen.blit(subtitle_render, subtitle_pos.topleft)
+    x = game.width - pad
+    max_line_width = max(40, game.width // 4)
     for line in status_lines:
-        render = game.small_font.render(line, True, palette["text"])
+        clipped = truncate_text(game.small_font, str(line), max_line_width)
+        render = game.small_font.render(clipped, True, palette["text"])
         rect = render.get_rect()
         x -= rect.width
         game.screen.blit(render, (x, 18))
-        x -= 16
+        x -= pad
 
 
 def draw_mmo_command_panel(
@@ -138,22 +166,24 @@ def draw_mmo_command_panel(
             "panel",
             meta={"bounds": pygame.Rect(0, 0, game.width, game.height)},
         )
+    metrics = getattr(game, "ui_metrics", None)
+    pad = int(getattr(metrics, "panel_pad", 16))
     panel = pygame.Surface(rect.size, pygame.SRCALPHA)
     panel.fill((*palette["panel"], 220))
-    pygame.draw.rect(panel, palette["border"], panel.get_rect(), 2)
-    x = 16
-    y = 12
+    pygame.draw.rect(panel, palette["border"], panel.get_rect(), metrics.border_thickness if metrics else 2)
+    x = pad
+    y = metrics.pad(12) if metrics else 12
     for title, lines in sections:
-        if y > rect.height - 28:
+        if y > rect.height - (metrics.pad(28) if metrics else 28):
             break
         heading = game.small_font.render(title, True, palette["accent"])
         panel.blit(heading, (x, y))
-        y += 20
+        y += metrics.pad(20) if metrics else 20
         for line in lines:
             label = game.small_font.render(line, True, palette["text"])
             panel.blit(label, (x, y))
-            y += 18
-        y += 8
+            y += metrics.pad(18) if metrics else 18
+        y += max(4, (metrics.pad(8) if metrics else 8))
     game.screen.blit(panel, rect.topleft)
 
 
@@ -174,47 +204,57 @@ def draw_mmo_status_panel(
             "panel",
             meta={"bounds": pygame.Rect(0, 0, game.width, game.height)},
         )
+    metrics = getattr(game, "ui_metrics", None)
+    pad = int(getattr(metrics, "panel_pad", 16))
     panel = pygame.Surface(rect.size, pygame.SRCALPHA)
     panel.fill((*palette["panel_alt"], 230))
-    pygame.draw.rect(panel, palette["border"], panel.get_rect(), 2)
+    pygame.draw.rect(panel, palette["border"], panel.get_rect(), metrics.border_thickness if metrics else 2)
     header = game.small_font.render(title, True, palette["accent"])
-    panel.blit(header, (16, 10))
+    panel.blit(header, (pad, metrics.pad(10) if metrics else 10))
     pygame.draw.line(
         panel,
         palette["idol_pink"],
-        (16, 28),
-        (rect.width - 16, 28),
+        (pad, metrics.pad(28) if metrics else 28),
+        (rect.width - pad, metrics.pad(28) if metrics else 28),
         1,
     )
-    y = 32
+    y = metrics.pad(32) if metrics else 32
     for label, value in rows:
-        if y > rect.height - 24:
+        if y > rect.height - (metrics.pad(24) if metrics else 24):
             break
         label_render = game.small_font.render(label, True, palette["text_dim"])
         value_render = game.small_font.render(value, True, palette["text"])
-        panel.blit(label_render, (16, y))
-        panel.blit(value_render, (rect.width - value_render.get_width() - 16, y))
-        y += 20
+        panel.blit(label_render, (pad, y))
+        panel.blit(value_render, (rect.width - value_render.get_width() - pad, y))
+        y += metrics.pad(20) if metrics else 20
     game.screen.blit(panel, rect.topleft)
 
 
 def draw_mmo_footer(game, text: str) -> None:
     """Draw a footer strip for system status messaging."""
     palette = mmo_palette()
-    height = 34
-    rect = pygame.Rect(0, game.height - height, game.width, height)
+    metrics = getattr(game, "ui_metrics", None)
+    pad = int(getattr(metrics, "panel_pad", 16))
+    height = metrics.pad(34) if metrics else 34
+    rect = place(
+        pygame.Rect(0, 0, game.width, game.height),
+        game.width,
+        height,
+        anchor="bl",
+    )
     debugger = getattr(game, "ui_debugger", None)
     if debugger is not None and debugger.is_active:
         debugger.collect_rect(
-            "mmo.footer_bar",
+            "mmo.footer",
             rect,
             "panel",
             meta={"bounds": pygame.Rect(0, 0, game.width, game.height)},
         )
     panel = pygame.Surface(rect.size, pygame.SRCALPHA)
     panel.fill((*palette["panel"], 224))
-    pygame.draw.line(panel, palette["border"], (0, 0), (rect.width, 0), 2)
+    pygame.draw.line(panel, palette["border"], (0, 0), (rect.width, 0), metrics.border_thickness if metrics else 2)
     pygame.draw.line(panel, palette["neon"], (0, 2), (rect.width, 2), 1)
-    label = game.small_font.render(text, True, palette["text_dim"])
-    panel.blit(label, (20, 8))
+    clipped = truncate_text(game.small_font, str(text), max(40, rect.width - pad * 2))
+    label = game.small_font.render(clipped, True, palette["text_dim"])
+    panel.blit(label, (pad, max(0, (rect.height - label.get_height()) // 2)))
     game.screen.blit(panel, rect.topleft)

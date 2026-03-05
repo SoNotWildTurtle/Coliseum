@@ -9,6 +9,7 @@ import random
 import pygame
 
 from .mmo_ui import mmo_palette
+from .ui_layout import inset_rect, place, vstack
 
 MENU_BG_COLOR = (10, 17, 30)  # deep navy background
 MENU_TEXT_COLOR = (240, 245, 255)  # soft white text
@@ -632,14 +633,15 @@ class MenuMixin:
         outer_margin = max(20, int(self.width * 0.04))
         gutter = max(metrics.gutter if metrics else 14, int(self.width * 0.02))
         screen_bounds = pygame.Rect(0, 0, self.width, self.height)
-        content_bounds = pygame.Rect(
-            gutter,
-            gutter,
-            max(0, self.width - gutter * 2),
-            max(0, self.height - gutter * 2),
-        )
+        content_bounds = inset_rect(screen_bounds, gutter, gutter, gutter, gutter)
         if has_debug:
             debugger.collect_rect("menu.screen_bounds", screen_bounds, "bounds")
+            debugger.collect_rect(
+                "menu.safe_bounds",
+                content_bounds,
+                "bounds",
+                meta={"bounds": screen_bounds},
+            )
             debugger.collect_rect(
                 "menu.content_bounds",
                 content_bounds,
@@ -650,11 +652,15 @@ class MenuMixin:
         title_text = "Hololive Coliseum"
         if getattr(self, "mmo_unlocked", False):
             title_text = "Hololive Coliseum: MMO Command"
-        self._draw_title(title_text, (self.width // 2, title_y))
+        title_rect = place(
+            content_bounds,
+            self.title_font.size(title_text)[0],
+            self.title_font.size(title_text)[1],
+            anchor="tc",
+            dy=title_y - content_bounds.top,
+        )
+        self._draw_title(title_text, title_rect.center)
         if has_debug:
-            title_w, title_h = self.title_font.size(title_text)
-            title_rect = pygame.Rect(0, 0, title_w, title_h)
-            title_rect.center = (self.width // 2, title_y)
             debugger.collect_rect(
                 "menu.title",
                 title_rect,
@@ -670,9 +676,22 @@ class MenuMixin:
             self.height - metrics.pad(36) if metrics else self.height - 36,
             title_y + self.title_font.get_height() // 2 + title_gap,
         )
-        subtitle_rect = subtitle.get_rect(center=(self.width // 2, subtitle_y))
+        subtitle_rect = place(
+            content_bounds,
+            subtitle.get_width(),
+            subtitle.get_height(),
+            anchor="tc",
+            dy=subtitle_y - content_bounds.top,
+        )
         self.screen.blit(subtitle, subtitle_rect)
         if has_debug:
+            header_rect = pygame.Rect(
+                content_bounds.x,
+                content_bounds.y,
+                content_bounds.width,
+                max(40, subtitle_rect.bottom - content_bounds.y + title_gap // 2),
+            )
+            debugger.collect_rect("menu.header", header_rect, "panel", meta={"bounds": content_bounds})
             debugger.collect_rect(
                 "menu.subtitle",
                 subtitle_rect,
@@ -779,6 +798,7 @@ class MenuMixin:
         content_height = max(150, menu_bottom - menu_top)
         content_x = outer_margin
         content_width = max(320, self.width - outer_margin * 2)
+        content_rect = pygame.Rect(content_x, menu_top, content_width, content_height)
 
         min_side_width = 170
         preferred_side = max(min_side_width, int(content_width * 0.23))
@@ -809,9 +829,9 @@ class MenuMixin:
                 center_height = max(130, info_rect.y - menu_top - 10)
         else:
             side_width = preferred_side
-            center_x = content_x + side_width + gutter
+            center_x = content_rect.x + side_width + gutter
             center_height = content_height
-            info_rect = pygame.Rect(content_x, menu_top, side_width, content_height)
+            info_rect = pygame.Rect(content_rect.x, menu_top, side_width, content_height)
             setup_rect = pygame.Rect(
                 center_x + center_width + gutter, menu_top, side_width, content_height
             )
@@ -904,12 +924,19 @@ class MenuMixin:
                 ),
             )
         option_rows: list[tuple[str, pygame.Rect]] = []
+        row_heights = [max(22, line_height) for _ in visible_options]
+        row_stack = vstack(
+            pygame.Rect(panel_rect.x, start_y, panel_rect.width, total_options_height),
+            row_heights,
+            0,
+            align="center",
+            debugger=debugger if has_debug else None,
+            name_prefix="menu.option_row_stack",
+            kind="option",
+        )
         for draw_idx, opt in enumerate(visible_options):
             i = visible_start + draw_idx
-            center = (
-                panel_rect.centerx,
-                start_y + draw_idx * line_height + line_height // 2,
-            )
+            center = row_stack[draw_idx].center
             row_width = min(
                 max(80, option_font.size(opt)[0] + panel_pad * 2),
                 max(80, panel_rect.width - panel_pad * 2),
@@ -1029,6 +1056,13 @@ class MenuMixin:
         )
         self.screen.blit(status_label, status_rect)
         if has_debug:
+            footer_rect = pygame.Rect(
+                content_bounds.x,
+                max(content_bounds.y, status_rect.y - (metrics.pad(20) if metrics else 20)),
+                content_bounds.width,
+                content_bounds.bottom - max(content_bounds.y, status_rect.y - (metrics.pad(20) if metrics else 20)),
+            )
+            debugger.collect_rect("menu.footer", footer_rect, "panel", meta={"bounds": content_bounds})
             debugger.collect_rect(
                 "menu.footer_status",
                 status_rect,
@@ -1037,7 +1071,13 @@ class MenuMixin:
             )
             prompt_text = "Use arrows + Enter/Space to select"
             prompt_surf = self.small_font.render(prompt_text, True, MENU_TEXT_COLOR)
-            prompt_rect = prompt_surf.get_rect(center=(self.width // 2, self.height - 24))
+            prompt_rect = place(
+                screen_bounds,
+                prompt_surf.get_width(),
+                prompt_surf.get_height(),
+                anchor="bc",
+                dy=-(metrics.pad(24) if metrics else 24),
+            )
             debugger.collect_rect(
                 "menu.footer_prompt",
                 prompt_rect,

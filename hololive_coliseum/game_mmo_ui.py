@@ -2218,6 +2218,12 @@ class GameMMOUI:
                 "panel",
                 meta={"bounds": pygame.Rect(0, 0, self.width, self.height)},
             )
+            debugger.collect_rect(
+                "mmo.main_panel",
+                panel_rect,
+                "panel",
+                meta={"bounds": pygame.Rect(0, 0, self.width, self.height)},
+            )
         palette = self._mmo_draw_panel(panel_rect)
         x = panel_rect.x + 12
         y = panel_rect.y + 12

@@ -33,6 +33,20 @@ These are manual checks when changing menus or gameplay UX:
 - Enter a story chapter and ensure hazards/platforms spawn correctly.
 - Use the MMO hub to confirm overlays render and map layers toggle.
 
+## UI smoke runner
+
+Run the headless UI smoke runner for deterministic menu/HUD/MMO checks:
+
+```
+python -m hololive_coliseum.tools.ui_smoke_runner --res 1280x720 --font-scale 1.0 --mode menu --frames 30
+```
+
+Stress config (useful for overflow/collision checks with UI debug logging):
+
+```
+python -m hololive_coliseum.tools.ui_smoke_runner --res 1024x576 --font-scale 1.25 --mode all --frames 60 --ui-debug
+```
+
 ## MMO hub checklist
 
 Use this when touching MMO hub logic, flow, or UI:

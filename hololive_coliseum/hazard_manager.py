@@ -12,6 +12,50 @@ class HazardManager:
         self.damage_multiplier = 1.0
         self.analytics = analytics
         self.objective_manager = objective_manager
+        self.event_sink = None
+
+    def set_event_sink(self, event_sink) -> None:
+        """Attach an optional event sink for hazard/heal provenance."""
+
+        self.event_sink = event_sink
+
+    @staticmethod
+    def _entity_id(entity) -> str:
+        if entity is None:
+            return "none"
+        return f"{entity.__class__.__name__}:{id(entity)}"
+
+    def _emit_event(self, event: dict) -> None:
+        sink = self.event_sink
+        if sink is None:
+            return
+        try:
+            sink(dict(event))
+        except Exception:
+            return
+
+    def _emit_hp_event(
+        self,
+        *,
+        event_type: str,
+        label: str,
+        target,
+        hp_before: float,
+        hp_after: float,
+    ) -> None:
+        amount = abs(float(hp_after) - float(hp_before))
+        if amount <= 0:
+            return
+        self._emit_event(
+            {
+                "type": str(event_type),
+                "source": f"hazard:{label}",
+                "target_id": self._entity_id(target),
+                "amount": float(amount),
+                "hp_before": float(hp_before),
+                "hp_after": float(hp_after),
+            }
+        )
 
     def set_damage_multiplier(self, multiplier: float) -> None:
         """Scale hazard damage to match global event modifiers."""
@@ -127,21 +171,53 @@ class HazardManager:
         if hz:
             if isinstance(hz, SpikeTrap) and now - self.last_damage >= 500:
                 self._record_hazard(hz, "spike")
+                hp_before = float(getattr(player, "health", 0))
                 player.take_damage(self._scaled_damage(hz.damage))
+                self._emit_hp_event(
+                    event_type="hazard_damage",
+                    label="spike",
+                    target=player,
+                    hp_before=hp_before,
+                    hp_after=float(getattr(player, "health", 0)),
+                )
                 self.last_damage = now
             elif isinstance(hz, LavaZone) and now - self.last_damage >= hz.interval:
                 self._record_hazard(hz, "lava")
+                hp_before = float(getattr(player, "health", 0))
                 player.take_damage(self._scaled_damage(hz.damage))
+                self._emit_hp_event(
+                    event_type="hazard_damage",
+                    label="lava",
+                    target=player,
+                    hp_before=hp_before,
+                    hp_after=float(getattr(player, "health", 0)),
+                )
                 self.last_damage = now
             elif isinstance(hz, AcidPool) and now - self.last_damage >= hz.interval:
                 self._record_hazard(hz, "acid")
+                hp_before = float(getattr(player, "health", 0))
                 player.take_damage(self._scaled_damage(hz.damage))
+                self._emit_hp_event(
+                    event_type="hazard_damage",
+                    label="acid",
+                    target=player,
+                    hp_before=hp_before,
+                    hp_after=float(getattr(player, "health", 0)),
+                )
                 player.set_friction_multiplier(hz.friction)
                 self.last_damage = now
                 return
             elif isinstance(hz, LightningZone) and now - self.last_damage >= hz.interval:
                 self._record_hazard(hz, "lightning")
+                hp_before = float(getattr(player, "health", 0))
                 player.take_damage(self._scaled_damage(hz.damage))
+                self._emit_hp_event(
+                    event_type="hazard_damage",
+                    label="lightning",
+                    target=player,
+                    hp_before=hp_before,
+                    hp_after=float(getattr(player, "health", 0)),
+                )
                 player.velocity.y = hz.force
                 player.on_ground = False
                 self.last_damage = now
@@ -190,7 +266,15 @@ class HazardManager:
                 player.velocity.x += hz.force
             elif isinstance(hz, RegenZone) and now - self.last_damage >= hz.interval:
                 self._record_hazard(hz, "regen")
+                hp_before = float(getattr(player, "health", 0))
                 player.health = player.health_manager.heal(hz.heal)
+                self._emit_hp_event(
+                    event_type="heal",
+                    label="regen",
+                    target=player,
+                    hp_before=hp_before,
+                    hp_after=float(getattr(player, "health", 0)),
+                )
                 self.last_damage = now
             elif isinstance(hz, IceZone):
                 self._record_hazard(hz, "ice")
@@ -218,21 +302,53 @@ class HazardManager:
         hz = pygame.sprite.spritecollideany(enemy, self.hazards)
         if isinstance(hz, SpikeTrap):
             self._record_hazard(hz, "spike")
+            hp_before = float(getattr(enemy, "health", 0))
             enemy.take_damage(self._scaled_damage(hz.damage))
+            self._emit_hp_event(
+                event_type="hazard_damage",
+                label="spike",
+                target=enemy,
+                hp_before=hp_before,
+                hp_after=float(getattr(enemy, "health", 0)),
+            )
             if enemy.health == 0:
                 enemy.kill()
                 return True
         elif isinstance(hz, LavaZone) and now - self.last_damage >= hz.interval:
             self._record_hazard(hz, "lava")
+            hp_before = float(getattr(enemy, "health", 0))
             enemy.take_damage(self._scaled_damage(hz.damage))
+            self._emit_hp_event(
+                event_type="hazard_damage",
+                label="lava",
+                target=enemy,
+                hp_before=hp_before,
+                hp_after=float(getattr(enemy, "health", 0)),
+            )
             self.last_damage = now
         elif isinstance(hz, AcidPool) and now - self.last_damage >= hz.interval:
             self._record_hazard(hz, "acid")
+            hp_before = float(getattr(enemy, "health", 0))
             enemy.take_damage(self._scaled_damage(hz.damage))
+            self._emit_hp_event(
+                event_type="hazard_damage",
+                label="acid",
+                target=enemy,
+                hp_before=hp_before,
+                hp_after=float(getattr(enemy, "health", 0)),
+            )
             self.last_damage = now
         elif isinstance(hz, LightningZone) and now - self.last_damage >= hz.interval:
             self._record_hazard(hz, "lightning")
+            hp_before = float(getattr(enemy, "health", 0))
             enemy.take_damage(self._scaled_damage(hz.damage))
+            self._emit_hp_event(
+                event_type="hazard_damage",
+                label="lightning",
+                target=enemy,
+                hp_before=hp_before,
+                hp_after=float(getattr(enemy, "health", 0)),
+            )
             enemy.velocity.y = hz.force
             enemy.on_ground = False
             self.last_damage = now
@@ -273,7 +389,15 @@ class HazardManager:
             enemy.velocity.x += hz.force
         elif isinstance(hz, RegenZone) and now - self.last_damage >= hz.interval:
             self._record_hazard(hz, "regen")
+            hp_before = float(getattr(enemy, "health", 0))
             enemy.health = enemy.health_manager.heal(hz.heal)
+            self._emit_hp_event(
+                event_type="heal",
+                label="regen",
+                target=enemy,
+                hp_before=hp_before,
+                hp_after=float(getattr(enemy, "health", 0)),
+            )
             self.last_damage = now
         return False
 

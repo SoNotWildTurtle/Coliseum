@@ -162,6 +162,30 @@ def load_character_names() -> list[str]:
 class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
     """Main game class with menus, AI opponents, networking and settings."""
 
+    @staticmethod
+    def _event_target_id(target: object | None) -> str:
+        if target is None:
+            return "none"
+        return f"{target.__class__.__name__}:{id(target)}"
+
+    def emit_event(self, event: dict[str, object]) -> None:
+        """Emit an optional gameplay event to the active sink."""
+
+        sink = getattr(self, "event_sink", None)
+        if sink is None:
+            return
+        payload = dict(event)
+        payload.setdefault("type", "unknown")
+        payload.setdefault("source", "game")
+        payload.setdefault("amount", 0.0)
+        payload.setdefault("target_id", "unknown")
+        payload.setdefault("frame", int(getattr(self, "_event_frame", 0)))
+        payload.setdefault("t_ms", int(pygame.time.get_ticks()))
+        try:
+            sink(payload)
+        except Exception:
+            return
+
     def __init__(self, width: int = 1280, height: int = 720):
         if os.environ.get("SDL_VIDEODRIVER") is None:
             force_visible = os.environ.get("HOLO_AUTOPLAY_VISIBLE") == "1"
@@ -176,6 +200,8 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 os.environ["SDL_VIDEODRIVER"] = "dummy"
         pygame.init()
         self.settings = load_settings()
+        self.event_sink = None
+        self._event_frame = 0
         self.coins = self.settings.get("coins", 0)
         self.profile_store = ProfileStore()
         self.profile_id = str(
@@ -1168,11 +1194,13 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.spawn_manager = SpawnManager()
         self.event_manager = EventManager()
         self.status_manager = StatusEffectManager()
+        self.status_manager.set_event_sink(self.emit_event)
         self.hazard_manager = HazardManager(       
             self.status_manager,
             analytics=self.auto_dev_manager,       
             objective_manager=self.objective_manager,
         )
+        self.hazard_manager.set_event_sink(self.emit_event)
         self.vote_adjustments: dict[str, int] = {}
         arena_width = max(self.width + 600, int(self.width * 1.8))
         arena_height = self.height
@@ -1690,6 +1718,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             self.team_manager,
             sound_manager=self.sound_manager,
         )
+        self.combat_manager.combat_event_sink = self.emit_event
         self.level_manager = LevelManager(self)
         self.autoplayer: AutoPlayer | None = (
             AutoPlayer(self, self.autoplay_tuning) if self.autoplay else None
@@ -5337,7 +5366,18 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 continue
             self._autoplay_record_feature(f"powerup:{p.effect}")
             if p.effect == "heal":
+                hp_before = float(getattr(self.player, "health", 0))
                 self.player.health = self.player.max_health
+                self.emit_event(
+                    {
+                        "type": "heal",
+                        "source": "powerup:heal",
+                        "target_id": self._event_target_id(self.player),
+                        "amount": max(0.0, float(self.player.health) - hp_before),
+                        "hp_before": hp_before,
+                        "hp_after": float(getattr(self.player, "health", 0)),
+                    }
+                )
             elif p.effect == "mana":
                 self.player.mana = self.player.max_mana
             elif p.effect == "stamina":
@@ -5540,6 +5580,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.running = True
         frame_index = 0
         while self.running:
+            self._event_frame = int(frame_index)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
@@ -6954,9 +6995,20 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                         self.spawn_manager.schedule("xp", now + 11500)
                 for zone in self.healing_zones:
                     if zone.rect.colliderect(self.player.rect):
+                        hp_before = float(getattr(self.player, "health", 0))
                         self.player.health = min(
                             self.player.max_health,
                             self.player.health + zone.heal_rate,
+                        )
+                        self.emit_event(
+                            {
+                                "type": "heal",
+                                "source": "zone:healing",
+                                "target_id": self._event_target_id(self.player),
+                                "amount": max(0.0, float(self.player.health) - hp_before),
+                                "hp_before": hp_before,
+                                "hp_after": float(getattr(self.player, "health", 0)),
+                            }
                         )
                 self._handle_powerup_collision()
                 self._autoplay_update_learning(now)

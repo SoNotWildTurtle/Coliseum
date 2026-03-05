@@ -627,13 +627,40 @@ class MenuMixin:
         panel_pad = metrics.panel_pad if metrics else 16
         title_gap = metrics.title_gap if metrics else 18
         border_w = metrics.border_thickness if metrics else 2
+        debugger = getattr(self, "ui_debugger", None)
+        has_debug = bool(debugger is not None and debugger.is_active)
         outer_margin = max(20, int(self.width * 0.04))
         gutter = max(metrics.gutter if metrics else 14, int(self.width * 0.02))
+        screen_bounds = pygame.Rect(0, 0, self.width, self.height)
+        content_bounds = pygame.Rect(
+            gutter,
+            gutter,
+            max(0, self.width - gutter * 2),
+            max(0, self.height - gutter * 2),
+        )
+        if has_debug:
+            debugger.collect_rect("menu.screen_bounds", screen_bounds, "bounds")
+            debugger.collect_rect(
+                "menu.content_bounds",
+                content_bounds,
+                "bounds",
+                meta={"bounds": screen_bounds},
+            )
         title_y = int(self.height * 0.18)
         title_text = "Hololive Coliseum"
         if getattr(self, "mmo_unlocked", False):
             title_text = "Hololive Coliseum: MMO Command"
         self._draw_title(title_text, (self.width // 2, title_y))
+        if has_debug:
+            title_w, title_h = self.title_font.size(title_text)
+            title_rect = pygame.Rect(0, 0, title_w, title_h)
+            title_rect.center = (self.width // 2, title_y)
+            debugger.collect_rect(
+                "menu.title",
+                title_rect,
+                "title",
+                meta={"bounds": content_bounds},
+            )
         subtitle = self.small_font.render(
             "Adaptive UI scales with your resolution",
             True,
@@ -643,7 +670,15 @@ class MenuMixin:
             self.height - metrics.pad(36) if metrics else self.height - 36,
             title_y + self.title_font.get_height() // 2 + title_gap,
         )
-        self.screen.blit(subtitle, subtitle.get_rect(center=(self.width // 2, subtitle_y)))
+        subtitle_rect = subtitle.get_rect(center=(self.width // 2, subtitle_y))
+        self.screen.blit(subtitle, subtitle_rect)
+        if has_debug:
+            debugger.collect_rect(
+                "menu.subtitle",
+                subtitle_rect,
+                "label",
+                meta={"bounds": content_bounds},
+            )
         menu_top = int(self.height * 0.31)
         if getattr(self, "mmo_unlocked", False):
             mmo_palette_local = mmo_palette()
@@ -792,6 +827,25 @@ class MenuMixin:
             border_w,
         )
         self.screen.blit(panel, panel_rect)
+        if has_debug:
+            debugger.collect_rect(
+                "menu.main_panel",
+                panel_rect,
+                "panel",
+                meta={"bounds": content_bounds},
+            )
+            debugger.collect_rect(
+                "menu.info_panel",
+                info_rect,
+                "panel",
+                meta={"bounds": content_bounds},
+            )
+            debugger.collect_rect(
+                "menu.setup_panel",
+                setup_rect,
+                "panel",
+                meta={"bounds": content_bounds},
+            )
 
         base_option_size = max(15, int(31 * menu_scale))
         min_option_size = 12
@@ -849,16 +903,40 @@ class MenuMixin:
                     )
                 ),
             )
+        option_rows: list[tuple[str, pygame.Rect]] = []
         for draw_idx, opt in enumerate(visible_options):
             i = visible_start + draw_idx
             center = (
                 panel_rect.centerx,
                 start_y + draw_idx * line_height + line_height // 2,
             )
+            row_width = min(
+                max(80, option_font.size(opt)[0] + panel_pad * 2),
+                max(80, panel_rect.width - panel_pad * 2),
+            )
+            row_rect = pygame.Rect(0, 0, row_width, max(22, line_height))
+            row_rect.center = center
+            option_rows.append((f"menu.option.{i}", row_rect))
+            if has_debug:
+                debugger.collect_rect(
+                    f"menu.option_row.{i}",
+                    row_rect,
+                    "option",
+                    meta={"bounds": panel_rect},
+                )
             if opt == "MMO":
                 self._draw_mmo_option_label(opt, i, center, font=option_font)
             else:
                 self._draw_option_label(opt, i, center, font=option_font)
+            if has_debug and i == self.menu_index:
+                debugger.collect_rect(
+                    "menu.selected_option",
+                    row_rect,
+                    "highlight",
+                    meta={"bounds": panel_rect},
+                )
+        if has_debug:
+            debugger.check_collisions("menu_option_rows", option_rows)
 
         lines = []
         difficulty = "n/a"
@@ -950,6 +1028,22 @@ class MenuMixin:
             bottom=self.height - max(8, outer_margin // 2),
         )
         self.screen.blit(status_label, status_rect)
+        if has_debug:
+            debugger.collect_rect(
+                "menu.footer_status",
+                status_rect,
+                "label",
+                meta={"bounds": content_bounds},
+            )
+            prompt_text = "Use arrows + Enter/Space to select"
+            prompt_surf = self.small_font.render(prompt_text, True, MENU_TEXT_COLOR)
+            prompt_rect = prompt_surf.get_rect(center=(self.width // 2, self.height - 24))
+            debugger.collect_rect(
+                "menu.footer_prompt",
+                prompt_rect,
+                "label",
+                meta={"bounds": screen_bounds},
+            )
         self._draw_input_prompt("Use arrows + Enter/Space to select")
         self._draw_border()
 

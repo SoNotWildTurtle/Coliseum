@@ -4,7 +4,7 @@ import os
 import random
 import math
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pygame
 from cryptography.hazmat.primitives import serialization
 
@@ -51,7 +51,13 @@ from .environment_manager import EnvironmentManager
 from .spawn_manager import SpawnManager
 from .event_manager import EventManager
 from .event_modifier_manager import EventModifierManager
-from .save_manager import load_settings, save_settings, save_inventory, wipe_saves
+from .save_manager import (
+    load_inventory,
+    load_settings,
+    save_inventory,
+    save_settings,
+    wipe_saves,
+)
 from .network import NetworkManager
 from .node_registry import load_nodes
 from .keybind_manager import KeybindManager
@@ -131,6 +137,7 @@ from .ui_metrics import (
     normalize_user_font_scale,
 )
 from .ui_debug import UIDebugger
+from .profile_store import Profile, ProfileStore
 
 
 CHARACTER_PLAN_FILE = os.path.join(
@@ -170,6 +177,16 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         pygame.init()
         self.settings = load_settings()
         self.coins = self.settings.get("coins", 0)
+        self.profile_store = ProfileStore()
+        self.profile_id = str(
+            os.environ.get("HOLO_PROFILE_ID")
+            or self.settings.get("account_id")
+            or "default"
+        )
+        self.profile: Profile = self.profile_store.load(self.profile_id)
+        self.profile_warnings: list[str] = list(self.profile.validation_warnings)
+        self._bootstrap_profile_from_legacy_settings()
+        self._apply_profile_to_global_progression()
         self.width = self.settings.get("width", width)
         self.height = self.settings.get("height", height)
         self.world_width = self.width
@@ -454,10 +471,12 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.chat_manager = ChatManager()
         self.chat_input = ""
         self.achievement_manager = AchievementManager()
-        self.achievement_manager.load_from_dict(self.settings)
+        self.achievement_manager.load_from_dict(
+            {"achievements": self.profile.achievements.get("unlocked_ids", [])}
+        )
         self.reputation_manager = ReputationManager()
         self.reputation_manager.load_from_dict(
-            self.settings.get("reputation", {})
+            self.profile.reputation.get("factions", {})
         )
         self.objective_manager = ObjectiveManager()
         self.objective_manager.load_from_dict(
@@ -532,7 +551,15 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             headless=(os.environ.get("PYGAME_HEADLESS") == "1"),
         )
         self.ui_debug_summary_path: str | None = None
-        self.mmo_unlocked = bool(self.settings.get("mmo_unlocked", False))
+        profile_unlocks = self.profile.progression.get("unlocks", {})
+        if not isinstance(profile_unlocks, dict):
+            profile_unlocks = {}
+        self.mmo_unlocked = bool(
+            profile_unlocks.get(
+                "mmo_unlocked",
+                self.settings.get("mmo_unlocked", False),
+            )
+        )
         self.mmo_pending = False
         self.mmo_player_id = "player"
         shard_setting = str(
@@ -1636,6 +1663,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.map_manager.add_map("Storm Archive", storm_map)
         self.map_manager.add_map("Verdant Forge", verdant_forge_map)
         configure_story_and_ui(self, image_dir)
+        self._apply_profile_meta_selection()
         if self.autoplay_full and self.chapters:
             self.autoplay_levels_target = len(self.chapters)
             self.autoplay_deadline = None
@@ -5365,6 +5393,148 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             if xp:
                 player.gain_xp(xp)
 
+    def _bootstrap_profile_from_legacy_settings(self) -> None:
+        """Seed an empty profile from legacy settings/inventory files."""
+
+        items = self.profile.inventory.get("items", {})
+        balances = self.profile.economy.get("balances", {})
+        unlocks = self.profile.progression.get("unlocks", {})
+        has_progress = bool(
+            items
+            or self.profile.achievements.get("unlocked_ids")
+            or self.profile.reputation.get("factions")
+            or (isinstance(balances, dict) and int(balances.get("coins", 0)) > 0)
+            or (isinstance(unlocks, dict) and unlocks.get("mmo_unlocked"))
+        )
+        if has_progress:
+            return
+        legacy_inventory = load_inventory()
+        if isinstance(legacy_inventory, dict) and legacy_inventory:
+            self.profile.inventory["items"] = {
+                str(k): max(0, int(v))
+                for k, v in legacy_inventory.items()
+                if isinstance(k, str)
+            }
+        legacy_coins = self.settings.get("coins")
+        if legacy_coins is not None:
+            self.profile.economy.setdefault("balances", {})
+            self.profile.economy["balances"]["coins"] = max(0, int(legacy_coins))
+        legacy_achievements = self.settings.get("achievements", [])
+        if isinstance(legacy_achievements, list) and legacy_achievements:
+            self.profile.achievements["unlocked_ids"] = sorted(
+                {str(item) for item in legacy_achievements if str(item)}
+            )
+        legacy_reputation = self.settings.get("reputation", {})
+        if isinstance(legacy_reputation, dict) and legacy_reputation:
+            self.profile.reputation["factions"] = {
+                str(k): int(v)
+                for k, v in legacy_reputation.items()
+                if isinstance(k, str)
+            }
+        if self.settings.get("mmo_unlocked"):
+            self.profile.progression.setdefault("unlocks", {})
+            self.profile.progression["unlocks"]["mmo_unlocked"] = True
+        self.profile_store.save(self.profile)
+
+    def _apply_profile_to_global_progression(self) -> None:
+        """Apply profile-level progression to runtime defaults."""
+
+        balances = self.profile.economy.get("balances", {})
+        if isinstance(balances, dict):
+            profile_coins = max(0, int(balances.get("coins", 0)))
+            self.coins = max(int(self.coins), profile_coins)
+        unlocks = self.profile.progression.get("unlocks", {})
+        if isinstance(unlocks, dict):
+            self.mmo_unlocked = bool(unlocks.get("mmo_unlocked", False))
+
+    def _apply_profile_meta_selection(self) -> None:
+        """Restore last character selection from profile metadata."""
+
+        meta = self.profile.meta if isinstance(self.profile.meta, dict) else {}
+        last_character = str(meta.get("last_played_character", "") or "")
+        if last_character and last_character in self.characters and not self.autoplay:
+            self.selected_character = last_character
+
+    def _hydrate_player_from_profile(self, player: PlayerCharacter) -> None:
+        """Hydrate inventory/currency/XP state for a new player instance."""
+
+        inventory = self.profile.inventory if isinstance(self.profile.inventory, dict) else {}
+        items = inventory.get("items", {})
+        if isinstance(items, dict):
+            player.inventory.load_from_dict(
+                {str(k): max(0, int(v)) for k, v in items.items() if isinstance(k, str)}
+            )
+        capacity = inventory.get("capacity")
+        player.inventory.capacity = None if capacity is None else max(0, int(capacity))
+        economy = self.profile.economy if isinstance(self.profile.economy, dict) else {}
+        balances = economy.get("balances", {}) if isinstance(economy.get("balances", {}), dict) else {}
+        profile_coins = max(0, int(balances.get("coins", 0)))
+        player.currency_manager.balance = max(profile_coins, int(getattr(self, "coins", 0)))
+        progression = self.profile.progression if isinstance(self.profile.progression, dict) else {}
+        player.experience_manager.level = max(1, int(progression.get("level", 1)))
+        player.experience_manager.xp = max(0, int(progression.get("xp", 0)))
+        player.experience_manager.threshold = max(1, int(progression.get("threshold", 100)))
+        player.experience_manager.growth = max(
+            1.0,
+            float(progression.get("growth", player.experience_manager.growth)),
+        )
+        max_threshold = progression.get("max_threshold")
+        if max_threshold is None:
+            player.experience_manager.max_threshold = None
+        else:
+            player.experience_manager.max_threshold = max(1, int(max_threshold))
+
+    def _build_profile_snapshot(self) -> Profile:
+        """Build a profile snapshot from runtime progression managers."""
+
+        player = getattr(self, "player", None)
+        progression = dict(self.profile.progression)
+        inventory = dict(self.profile.inventory)
+        economy = dict(self.profile.economy)
+        achievements = dict(self.profile.achievements)
+        reputation = dict(self.profile.reputation)
+        meta = dict(self.profile.meta)
+        if player is not None:
+            inventory["items"] = player.inventory.to_dict()
+            inventory["capacity"] = player.inventory.capacity
+            economy.setdefault("balances", {})
+            economy["balances"] = dict(economy.get("balances", {}))
+            economy["balances"]["coins"] = player.currency_manager.get_balance()
+            progression["level"] = int(player.experience_manager.level)
+            progression["xp"] = int(player.experience_manager.xp)
+            progression["threshold"] = int(player.experience_manager.threshold)
+            progression["growth"] = float(player.experience_manager.growth)
+            progression["max_threshold"] = player.experience_manager.max_threshold
+        progression.setdefault("unlocks", {})
+        progression["unlocks"] = dict(progression.get("unlocks", {}))
+        progression["unlocks"]["mmo_unlocked"] = bool(self.mmo_unlocked)
+        achievements["unlocked_ids"] = sorted(self.achievement_manager.unlocked)
+        reputation["factions"] = self.reputation_manager.to_dict()
+        meta["last_played_character"] = str(self.selected_character or "")
+        meta["last_played_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        meta["session_count"] = int(meta.get("session_count", 0)) + 1
+        return Profile(
+            schema_version=self.profile.schema_version,
+            created_utc=self.profile.created_utc,
+            updated_utc=self.profile.updated_utc,
+            profile_id=self.profile.profile_id,
+            progression=progression,
+            inventory=inventory,
+            economy=economy,
+            achievements=achievements,
+            reputation=reputation,
+            meta=meta,
+            validation_warnings=[],
+            raw_payload=dict(self.profile.raw_payload),
+        )
+
+    def _save_profile_checkpoint(self) -> None:
+        """Persist profile state for exit/checkpoint saves."""
+
+        snapshot = self._build_profile_snapshot()
+        self.profile_store.save(snapshot)
+        self.profile = snapshot
+
     def run(self):
         """Start the main game loop."""
         self.running = True
@@ -7027,6 +7197,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         if player is not None:
             coins = player.currency_manager.get_balance()
             inventory = player.inventory.to_dict()
+        self._save_profile_checkpoint()
         mmo_position = self.world_player_manager.get_position(self.mmo_player_id)
         save_settings(
             {

@@ -7,6 +7,8 @@ import math
 
 import pygame
 
+from .ui_metrics import UIMetrics
+
 
 FLASH_DURATION = 150  # milliseconds
 
@@ -14,8 +16,13 @@ FLASH_DURATION = 150  # milliseconds
 class HUDManager:
     """Render status bars, combos and the arena overlay panels."""
 
-    def __init__(self, font: pygame.font.Font | None = None) -> None:
+    def __init__(
+        self,
+        font: pygame.font.Font | None = None,
+        metrics: UIMetrics | None = None,
+    ) -> None:
         self.font = font or pygame.font.SysFont(None, 24)
+        self.metrics = metrics
 
     def _draw_text(
         self,
@@ -43,6 +50,10 @@ class HUDManager:
         accent: tuple[int, int, int],
         pulse: float = 0.0,
     ) -> None:
+        metrics = self.metrics
+        border_w = metrics.border_thickness if metrics else 2
+        panel_pad = metrics.panel_pad if metrics else 8
+        title_gap = metrics.pad(4) if metrics else 4
         panel = pygame.Surface(rect.size, pygame.SRCALPHA)
         height = rect.height
         for y in range(height):
@@ -55,13 +66,13 @@ class HUDManager:
         glow = pygame.Surface(rect.size, pygame.SRCALPHA)
         glow.fill((*accent, int(40 + 60 * pulse)))
         screen.blit(glow, rect.topleft)
-        pygame.draw.rect(screen, border, rect, 2)
+        pygame.draw.rect(screen, border, rect, border_w)
         pygame.draw.line(
             screen,
             accent,
-            (rect.x + 8, rect.y + 4),
-            (rect.right - 8, rect.y + 4),
-            2,
+            (rect.x + panel_pad, rect.y + title_gap),
+            (rect.right - panel_pad, rect.y + title_gap),
+            border_w,
         )
 
     def draw(
@@ -89,6 +100,9 @@ class HUDManager:
         impact_scale: float | None = None,
     ) -> None:
         """Draw status bars, timers, combo text and optional objectives."""     
+        metrics = self.metrics
+        hud_pad = metrics.panel_pad if metrics else 10
+        top_gap = metrics.pad(80) if metrics else 80
         player.draw_status(screen)
         if allies:
             self._draw_allies_panel(screen, allies)
@@ -107,17 +121,17 @@ class HUDManager:
             overlay.fill((255, 0, 0, 60))
             screen.blit(overlay, (0, 0))
         timer_label = f"Time: {elapsed}"
-        timer_x = screen.get_width() - 120
-        timer_y = 10
+        timer_x = screen.get_width() - (metrics.pad(120) if metrics else 120)
+        timer_y = hud_pad
         self._draw_text(screen, timer_label, (255, 255, 255), (timer_x, timer_y))
         score_label = f"Score: {score}"
-        self._draw_text(screen, score_label, (255, 255, 255), (10, 80))
+        self._draw_text(screen, score_label, (255, 255, 255), (hud_pad, top_gap))
         if combo > 1:
             self._draw_text(
                 screen,
                 f"Combo: {combo}",
                 (255, 255, 255),
-                (10, 95),
+                (hud_pad, top_gap + (metrics.pad(15) if metrics else 15)),
             )
             self._draw_combo_meter(screen, combo)
         if hype_meter is not None:
@@ -129,7 +143,7 @@ class HUDManager:
                 threat_label,
             )
         if objectives:
-            y = 110
+            y = top_gap + (metrics.pad(30) if metrics else 30)
             height = len(objectives) * 15 + 10
             obj_rect = pygame.Rect(0, y - 5, screen.get_width(), height)
             pulse = (math.sin(now / 700) + 1) * 0.5
@@ -147,7 +161,7 @@ class HUDManager:
                     screen,
                     line,
                     (200, 230, 255),
-                    (10, y),
+                    (hud_pad, y),
                     shadow=(10, 16, 24),
                 )
                 y += 15
@@ -180,7 +194,14 @@ class HUDManager:
         impact_scale: float | None = None,
     ) -> None:
         """Render last-played SFX cue for debugging."""
-        rect = pygame.Rect(10, screen.get_height() - 42, 260, 28)
+        metrics = self.metrics
+        pad = metrics.panel_pad if metrics else 10
+        rect = pygame.Rect(
+            pad,
+            screen.get_height() - (metrics.pad(42) if metrics else 42),
+            metrics.pad(260) if metrics else 260,
+            metrics.pad(28) if metrics else 28,
+        )
         pulse = (math.sin(pygame.time.get_ticks() / 600) + 1) * 0.5
         self._draw_panel(
             screen,
@@ -196,7 +217,10 @@ class HUDManager:
             screen,
             text,
             (220, 235, 245),
-            (rect.x + 8, rect.y + 6),
+            (
+                rect.x + (metrics.panel_pad if metrics else 8),
+                rect.y + (metrics.pad(6) if metrics else 6),
+            ),
             shadow=(8, 12, 18),
         )
 

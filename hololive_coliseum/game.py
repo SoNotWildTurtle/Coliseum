@@ -126,6 +126,10 @@ from .mmo_ui import (
     mmo_palette,
 )
 from .mob import MobEnemy
+from .ui_metrics import (
+    build_ui_metrics_from_user_scale,
+    normalize_user_font_scale,
+)
 
 
 CHARACTER_PLAN_FILE = os.path.join(
@@ -1799,22 +1803,40 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
     def _apply_font_scale(self) -> None:
         """Apply accessibility and resolution-aware scaling to UI fonts."""
         user_scale = float(self.accessibility_manager.options.get("font_scale", 1.0))
-        user_scale = max(0.8, min(1.6, user_scale))
+        user_scale = normalize_user_font_scale(user_scale)
         self.accessibility_manager.options["font_scale"] = user_scale
-        baseline = min(self.width / 1280, self.height / 720)
-        resolution_scale = max(0.78, min(1.22, baseline ** 0.35))
-        effective_scale = max(0.72, min(1.85, user_scale * resolution_scale))
-        self.effective_font_scale = effective_scale
-        self.title_font = pygame.font.SysFont(None, max(28, int(64 * effective_scale)))
-        self.menu_font = pygame.font.SysFont(None, max(18, int(32 * effective_scale)))
+        self.ui_metrics = build_ui_metrics_from_user_scale(
+            user_scale,
+            self.width,
+            self.height,
+        )
+        scale = self.ui_metrics.ui_scale
+        self.effective_font_scale = scale
+        self.title_font = pygame.font.SysFont(None, max(28, int(64 * scale)))
+        self.menu_font = pygame.font.SysFont(None, max(18, int(32 * scale)))
         self.autoplay_trace_font = pygame.font.SysFont(
-            None, max(12, int(18 * effective_scale))
+            None, max(12, int(18 * scale))
         )
-        self.small_font = pygame.font.SysFont(None, max(14, int(20 * effective_scale)))
+        self.small_font = pygame.font.SysFont(None, max(14, int(20 * scale)))
         hud_font = pygame.font.SysFont(
-            None, max(10, int(self.hud_font_size * effective_scale))
+            None, max(10, int(self.hud_font_size * scale))
         )
-        self.hud_manager = HUDManager(hud_font)
+        self.hud_manager = HUDManager(hud_font, metrics=self.ui_metrics)
+        if os.environ.get("HOLO_UI_DEBUG") == "1":
+            debug_state = (
+                int(self.width),
+                int(self.height),
+                round(self.effective_font_scale, 4),
+                round(self.ui_metrics.ui_scale, 4),
+            )
+            if getattr(self, "_ui_debug_last", None) != debug_state:
+                self._ui_debug_last = debug_state
+                print(
+                    "[UI] "
+                    f"{self.width}x{self.height} "
+                    f"effective_font_scale={self.effective_font_scale:.3f} "
+                    f"ui_scale={self.ui_metrics.ui_scale:.3f}"
+                )
 
     def _sync_player_selection_lists(self) -> None:
         """Ensure selection lists match the number of human players."""

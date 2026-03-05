@@ -37,6 +37,7 @@ class CombatManager:
         self.damage_manager = DamageManager()
         self.sound_manager = sound_manager
         self.last_enemy_damage = 0
+        self.combat_event_sink = None
 
     def add(self, actor) -> None:
         """Add a combatant to the turn list."""
@@ -47,6 +48,62 @@ class CombatManager:
             getattr(actor, "invincible", False)
             or getattr(actor, "dodging", False)
             or now < getattr(actor, "invincible_until", 0)
+        )
+
+    @staticmethod
+    def _entity_id(entity) -> str:
+        if entity is None:
+            return "none"
+        if hasattr(entity, "name") and getattr(entity, "name"):
+            return str(getattr(entity, "name"))
+        return f"{entity.__class__.__name__}:{id(entity)}"
+
+    def _emit_combat_event(self, event: dict) -> None:
+        sink = getattr(self, "combat_event_sink", None)
+        if sink is None:
+            return
+        try:
+            sink(dict(event))
+        except Exception:
+            return
+
+    def _emit_damage_event(
+        self,
+        *,
+        now: int,
+        attacker,
+        target,
+        amount: float,
+        kind: str,
+        source: str,
+        crit: bool,
+        hp_before: float,
+        hp_after: float,
+    ) -> None:
+        self._emit_combat_event(
+            {
+                "type": "damage",
+                "t_ms": int(now),
+                "attacker_id": self._entity_id(attacker),
+                "target_id": self._entity_id(target),
+                "amount": float(amount),
+                "kind": str(kind),
+                "crit": bool(crit),
+                "source": str(source),
+                "hp_before": float(hp_before),
+                "hp_after": float(hp_after),
+            }
+        )
+
+    def _emit_ko_event(self, *, now: int, attacker, target, source: str) -> None:
+        self._emit_combat_event(
+            {
+                "type": "ko",
+                "t_ms": int(now),
+                "attacker_id": self._entity_id(attacker),
+                "target_id": self._entity_id(target),
+                "source": str(source),
+            }
         )
 
     def remove(self, actor) -> None:
@@ -102,6 +159,7 @@ class CombatManager:
                             proj.kill()
                         else:
                             base = getattr(proj, "attack", 10)
+                            hp_before = float(getattr(target, "health", 0))
                             dmg, critical = self.damage_manager.calculate(
                                 base,
                                 target.stats.get("defense"),
@@ -123,6 +181,25 @@ class CombatManager:
                                 getattr(proj, "knockback", 0.0),
                             )
                             target.take_damage(dmg)
+                            hp_after = float(getattr(target, "health", 0))
+                            self._emit_damage_event(
+                                now=now,
+                                attacker=getattr(proj, "owner", None),
+                                target=target,
+                                amount=dmg,
+                                kind="projectile",
+                                source=proj.__class__.__name__,
+                                crit=critical,
+                                hp_before=hp_before,
+                                hp_after=hp_after,
+                            )
+                            if hp_after <= 0:
+                                self._emit_ko_event(
+                                    now=now,
+                                    attacker=getattr(proj, "owner", None),
+                                    target=target,
+                                    source=proj.__class__.__name__,
+                                )
                             self._play_hit_sfx(dmg, critical)
                             if damage_numbers is not None:
                                 damage_numbers.add(
@@ -163,6 +240,7 @@ class CombatManager:
                         elif getattr(proj, "stun", False):
                             self.status_manager.add_effect(enemy, StunEffect())
                         base = attacker.stats.get("attack")
+                        hp_before = float(getattr(enemy, "health", 0))
                         dmg, critical = self.damage_manager.calculate(
                             base,
                             enemy.stats.get("defense"),
@@ -181,12 +259,30 @@ class CombatManager:
                             getattr(proj, "knockback", 0.0),
                         )
                         enemy.take_damage(dmg)
+                        hp_after = float(getattr(enemy, "health", 0))
+                        self._emit_damage_event(
+                            now=now,
+                            attacker=attacker,
+                            target=enemy,
+                            amount=dmg,
+                            kind="projectile",
+                            source=proj.__class__.__name__,
+                            crit=critical,
+                            hp_before=hp_before,
+                            hp_after=hp_after,
+                        )
                         self._play_hit_sfx(dmg, critical)
                         if damage_numbers is not None:
                             damage_numbers.add(
                                 DamageNumber(dmg, enemy.rect.center, critical)
                             )
                     if enemy.health == 0:
+                        self._emit_ko_event(
+                            now=now,
+                            attacker=attacker,
+                            target=enemy,
+                            source=proj.__class__.__name__,
+                        )
                         enemy.kill()
                         killed_enemies.append(enemy)
                 if not getattr(proj, "pierce", False):
@@ -209,6 +305,7 @@ class CombatManager:
                     if attack.rect.colliderect(target.rect):
                         if not self._is_invincible(target, now):
                             base = getattr(attack, "attack", 0) or 5
+                            hp_before = float(getattr(target, "health", 0))
                             dmg, critical = self.damage_manager.calculate(
                                 base,
                                 target.stats.get("defense"),
@@ -229,6 +326,25 @@ class CombatManager:
                                 ),
                             )
                             target.take_damage(dmg)
+                            hp_after = float(getattr(target, "health", 0))
+                            self._emit_damage_event(
+                                now=now,
+                                attacker=getattr(attack, "owner", None),
+                                target=target,
+                                amount=dmg,
+                                kind="melee",
+                                source=attack.__class__.__name__,
+                                crit=critical,
+                                hp_before=hp_before,
+                                hp_after=hp_after,
+                            )
+                            if hp_after <= 0:
+                                self._emit_ko_event(
+                                    now=now,
+                                    attacker=getattr(attack, "owner", None),
+                                    target=target,
+                                    source=attack.__class__.__name__,
+                                )
                             self._play_hit_sfx(dmg, critical)
                             if damage_numbers is not None:
                                 damage_numbers.add(
@@ -251,6 +367,7 @@ class CombatManager:
                     ):
                         continue
                     base = attacker.stats.get("attack") + 5
+                    hp_before = float(getattr(enemy, "health", 0))
                     dmg, critical = self.damage_manager.calculate(
                         base,
                         enemy.stats.get("defense"),
@@ -267,12 +384,30 @@ class CombatManager:
                         stagger_ms=self._stagger_duration(dmg, critical, base_ms=80),
                     )
                     enemy.take_damage(dmg)
+                    hp_after = float(getattr(enemy, "health", 0))
+                    self._emit_damage_event(
+                        now=now,
+                        attacker=attacker,
+                        target=enemy,
+                        amount=dmg,
+                        kind="melee",
+                        source=attack.__class__.__name__,
+                        crit=critical,
+                        hp_before=hp_before,
+                        hp_after=hp_after,
+                    )
                     self._play_hit_sfx(dmg, critical)
                     if damage_numbers is not None:
                         damage_numbers.add(
                             DamageNumber(dmg, enemy.rect.center, critical)
                         )
                     if enemy.health == 0:
+                        self._emit_ko_event(
+                            now=now,
+                            attacker=attacker,
+                            target=enemy,
+                            source=attack.__class__.__name__,
+                        )
                         enemy.kill()
                         killed_enemies.append(enemy)
             attack.kill()
@@ -284,6 +419,7 @@ class CombatManager:
                     self.last_enemy_damage = now
                 elif not self._is_invincible(target, now):
                     base = colliding.stats.get("attack")
+                    hp_before = float(getattr(target, "health", 0))
                     dmg, critical = self.damage_manager.calculate(
                         base,
                         target.stats.get("defense"),
@@ -300,6 +436,25 @@ class CombatManager:
                         stagger_ms=self._stagger_duration(dmg, critical, base_ms=50),
                     )
                     target.take_damage(dmg)
+                    hp_after = float(getattr(target, "health", 0))
+                    self._emit_damage_event(
+                        now=now,
+                        attacker=colliding,
+                        target=target,
+                        amount=dmg,
+                        kind="touch",
+                        source=colliding.__class__.__name__,
+                        crit=critical,
+                        hp_before=hp_before,
+                        hp_after=hp_after,
+                    )
+                    if hp_after <= 0:
+                        self._emit_ko_event(
+                            now=now,
+                            attacker=colliding,
+                            target=target,
+                            source=colliding.__class__.__name__,
+                        )
                     self._play_hit_sfx(dmg, critical)
                     if damage_numbers is not None:
                         damage_numbers.add(

@@ -199,6 +199,27 @@ class StatusEffectManager:
 
     def __init__(self) -> None:
         self._effects: list[tuple[object, StatusEffect]] = []
+        self.event_sink = None
+
+    def set_event_sink(self, event_sink) -> None:
+        """Attach an optional event sink for status tick provenance."""
+
+        self.event_sink = event_sink
+
+    @staticmethod
+    def _entity_id(entity) -> str:
+        if entity is None:
+            return "none"
+        return f"{entity.__class__.__name__}:{id(entity)}"
+
+    def _emit_event(self, event: dict) -> None:
+        sink = self.event_sink
+        if sink is None:
+            return
+        try:
+            sink(dict(event))
+        except Exception:
+            return
 
     def add_effect(self, target, effect: StatusEffect) -> None:
         effect.apply(target)
@@ -212,7 +233,23 @@ class StatusEffectManager:
                 effect.remove(target)
                 self._effects.remove((target, effect))
             else:
+                hp_before = float(getattr(target, "health", 0.0))
                 effect.update(target, now)
+                hp_after = float(getattr(target, "health", 0.0))
+                if hp_after != hp_before:
+                    delta = hp_after - hp_before
+                    self._emit_event(
+                        {
+                            "type": "status_tick",
+                            "source": f"status:{effect.__class__.__name__.lower()}",
+                            "target_id": self._entity_id(target),
+                            "amount": float(abs(delta)),
+                            "hp_before": float(hp_before),
+                            "hp_after": float(hp_after),
+                            "kind": "heal" if delta > 0 else "damage",
+                            "effect_id": effect.__class__.__name__,
+                        }
+                    )
 
     def active_effects(
         self,

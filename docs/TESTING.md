@@ -47,6 +47,36 @@ Stress config (useful for overflow/collision checks with UI debug logging):
 python -m hololive_coliseum.tools.ui_smoke_runner --res 1024x576 --font-scale 1.25 --mode all --frames 60 --ui-debug
 ```
 
+## Episode runner
+
+Run a deterministic headless arena episode and capture a signature:
+
+```
+python -m hololive_coliseum.tools.episode_runner --scenario basic --frames 120 --seed 1337 --headless
+```
+
+Run with strict invariants enabled:
+
+```
+python -m hololive_coliseum.tools.episode_runner --scenario basic --frames 120 --seed 1337 --headless --strict
+```
+
+Compare two identical runs across branches:
+
+```
+python -m hololive_coliseum.tools.episode_runner --scenario basic --frames 300 --seed 1337 --output-dir SavedGames/episodes/basic_1337
+python -m hololive_coliseum.tools.episode_runner --scenario basic --frames 300 --seed 1337 --output-dir SavedGames/episodes/basic_1337_repeat
+```
+
+Each run writes `episode_report.json` with `episode_signature`.
+Compare signatures from the two reports to spot regressions.
+
+Trace levels:
+
+- `--trace --trace-level minimal`: damage/KO/rewards only.
+- `--trace --trace-level normal`: adds resource and state deltas.
+- `--trace --trace-level verbose`: adds periodic AI snapshots.
+
 ## MMO hub checklist
 
 Use this when touching MMO hub logic, flow, or UI:

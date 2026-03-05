@@ -130,6 +130,7 @@ from .ui_metrics import (
     build_ui_metrics_from_user_scale,
     normalize_user_font_scale,
 )
+from .ui_debug import UIDebugger
 
 
 CHARACTER_PLAN_FILE = os.path.join(
@@ -514,6 +515,23 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.state_manager = GameStateManager(self.state)
         self.menu_manager = MenuManager()
         self.return_state = "main_menu"
+        ui_debug_overlay = os.environ.get("HOLO_UI_DEBUG_OVERLAY", "0") == "1"
+        ui_debug_log = os.environ.get("HOLO_UI_DEBUG_LOG", "0") == "1"
+        ui_debug_log_frames = os.environ.get("HOLO_UI_DEBUG_LOG_FRAMES", "0") == "1"
+        ui_debug_output_dir = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "SavedGames",
+            "ui_debug",
+        )
+        self.ui_debugger = UIDebugger(
+            enabled=ui_debug_overlay,
+            output_dir=ui_debug_output_dir,
+            log_enabled=ui_debug_log,
+            log_frames=ui_debug_log_frames,
+            headless=(os.environ.get("PYGAME_HEADLESS") == "1"),
+        )
+        self.ui_debug_summary_path: str | None = None
         self.mmo_unlocked = bool(self.settings.get("mmo_unlocked", False))
         self.mmo_pending = False
         self.mmo_player_id = "player"
@@ -1821,7 +1839,17 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         hud_font = pygame.font.SysFont(
             None, max(10, int(self.hud_font_size * scale))
         )
-        self.hud_manager = HUDManager(hud_font, metrics=self.ui_metrics)
+        self.hud_manager = HUDManager(
+            hud_font,
+            metrics=self.ui_metrics,
+            debugger=getattr(self, "ui_debugger", None),
+        )
+        if getattr(self, "ui_debugger", None) is not None:
+            self.ui_debugger.set_metadata(
+                resolution=f"{self.width}x{self.height}",
+                effective_font_scale=round(self.effective_font_scale, 4),
+                ui_scale=round(self.ui_metrics.ui_scale, 4),
+            )
         if os.environ.get("HOLO_UI_DEBUG") == "1":
             debug_state = (
                 int(self.width),
@@ -1924,6 +1952,14 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.arena_backdrop = surface
         self.arena_backdrop_size = size
         return surface
+
+    def _ui_debug_mode(self) -> str:
+        """Map current game state to coarse UI diagnostics mode."""
+        if self.state == "mmo":
+            return "mmo"
+        if self.menu_drawers.get(self.state) is not None:
+            return "menu"
+        return "hud"
 
 
     def _get_ground_surface(self, width: int) -> pygame.Surface:
@@ -2464,6 +2500,23 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
     def _draw_mmo_world(self) -> None:
         """Render a lightweight MMO world hub."""
         draw_mmo_backdrop(self)
+        debugger = getattr(self, "ui_debugger", None)
+        if debugger is not None and debugger.is_active:
+            screen_bounds = pygame.Rect(0, 0, self.width, self.height)
+            gutter = int(getattr(getattr(self, "ui_metrics", None), "gutter", 12))
+            safe_bounds = pygame.Rect(
+                gutter,
+                gutter,
+                max(0, self.width - gutter * 2),
+                max(0, self.height - gutter * 2),
+            )
+            debugger.collect_rect("mmo.screen_bounds", screen_bounds, "bounds")
+            debugger.collect_rect(
+                "mmo.safe_bounds",
+                safe_bounds,
+                "bounds",
+                meta={"bounds": screen_bounds},
+            )
         regions = self.world_generation_manager.region_manager.get_regions()
         self._mmo_draw_shard_widget()
         center = (self.width // 2, self.height // 2)
@@ -5315,6 +5368,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
     def run(self):
         """Start the main game loop."""
         self.running = True
+        frame_index = 0
         while self.running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -5336,6 +5390,16 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                         self.ground_y = self.height - 50
                         self.screen = self._apply_display_mode()
                         self._apply_font_scale()
+                elif (
+                    event.type == pygame.KEYDOWN
+                    and event.key == pygame.K_F3
+                    and (self.state != "mmo" or event.mod & pygame.KMOD_CTRL)
+                ):
+                    if self.ui_debugger is not None:
+                        state = self.ui_debugger.toggle()
+                        self._autoplay_trace(
+                            f"UI debug overlay -> {'on' if state else 'off'}",
+                        )
                 elif self.state == "splash" and event.type in (
                     pygame.KEYDOWN,
                     pygame.MOUSEBUTTONDOWN,
@@ -6470,6 +6534,15 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                     self.level_start_time = pygame.time.get_ticks()
                     self._set_state("playing")
 
+            if self.ui_debugger is not None and self.ui_debugger.is_active:
+                self.ui_debugger.begin_frame(
+                    mode=self._ui_debug_mode(),
+                    state_name=self.state,
+                    resolution=(self.width, self.height),
+                    ui_scale=float(getattr(self.ui_metrics, "ui_scale", 1.0)),
+                    effective_font_scale=float(getattr(self, "effective_font_scale", 1.0)),
+                    fps=float(self.clock.get_fps()),
+                )
             drawer = self.menu_drawers.get(self.state)
             if drawer is not None:
                 if self.state == "mmo":
@@ -6932,10 +7005,22 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
 
             if self.autoplay_trace_overlay:
                 self._draw_autoplay_trace()
+            if self.ui_debugger is not None and self.ui_debugger.is_active:
+                self.ui_debugger.render_overlay(
+                    self.screen,
+                    getattr(self, "ui_metrics", None),
+                    float(self.clock.get_fps()),
+                    self.state,
+                )
+                self.ui_debugger.flush_frame(frame_index)
             self._poll_network()
 
             pygame.display.flip()
             self.clock.tick(60)
+            frame_index += 1
+        if self.ui_debugger is not None and self.ui_debugger.log_enabled:
+            summary_path = self.ui_debugger.finalize_run()
+            self.ui_debug_summary_path = str(summary_path) if summary_path else None
         player = getattr(self, "player", None)
         coins = self.coins
         inventory: dict[str, int] | None = None

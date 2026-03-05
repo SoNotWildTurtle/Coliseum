@@ -36,6 +36,7 @@ _configure_headless_env()
 import pygame
 
 from hololive_coliseum.game import Game
+from hololive_coliseum.ui_debug import UIDebugger
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,8 @@ class RunConfig:
     mode: str
     seed: int
     screenshot: bool
+    ui_debug: bool
+    ui_debug_frames: bool
     output_dir: Path
     verbose: bool
 
@@ -155,6 +158,17 @@ def _run_mode(game: Game, mode: str, frames: int, screenshot_path: Path | None) 
     try:
         for idx in range(frames):
             pygame.event.pump()
+            debugger = getattr(game, "ui_debugger", None)
+            if debugger is not None and debugger.is_active:
+                ui_metrics = getattr(game, "ui_metrics", None)
+                debugger.begin_frame(
+                    mode=mode,
+                    state_name=game.state,
+                    resolution=(game.width, game.height),
+                    ui_scale=float(getattr(ui_metrics, "ui_scale", 1.0)),
+                    effective_font_scale=float(getattr(game, "effective_font_scale", 1.0)),
+                    fps=float(clock.get_fps()),
+                )
             start = time.perf_counter()
             if mode == "menu":
                 _render_menu_frame(game)
@@ -164,6 +178,14 @@ def _run_mode(game: Game, mode: str, frames: int, screenshot_path: Path | None) 
                 _render_mmo_frame(game)
             else:
                 raise ValueError(f"unknown mode: {mode}")
+            if debugger is not None and debugger.is_active:
+                debugger.render_overlay(
+                    game.screen,
+                    getattr(game, "ui_metrics", None),
+                    float(clock.get_fps()),
+                    game.state,
+                )
+                debugger.flush_frame(idx)
             pygame.display.flip()
             frame_times.append(time.perf_counter() - start)
             clock.tick(60)
@@ -205,6 +227,8 @@ def _run_single(config: RunConfig) -> tuple[bool, dict[str, Any]]:
             "frames": config.frames,
             "mode": config.mode,
             "seed": config.seed,
+            "ui_debug": config.ui_debug,
+            "ui_debug_frames": config.ui_debug_frames,
         },
         "modes_executed": [],
         "modes": {},
@@ -212,9 +236,28 @@ def _run_single(config: RunConfig) -> tuple[bool, dict[str, Any]]:
     }
     success = True
     game: Game | None = None
+    layout_summary_path: Path | None = None
     try:
         game = Game(width=config.width, height=config.height)
+        if config.ui_debug:
+            debugger = UIDebugger(
+                enabled=False,
+                output_dir=config.output_dir,
+                log_enabled=True,
+                log_frames=config.ui_debug_frames,
+                headless=(os.environ.get("PYGAME_HEADLESS") == "1"),
+            )
+            game.ui_debugger = debugger
+            debugger.set_metadata(
+                python_version=sys.version.split()[0],
+                pygame_version=pygame.version.ver,
+                run_mode=config.mode,
+                resolution=f"{config.width}x{config.height}",
+                requested_font_scale=config.font_scale,
+            )
         _apply_resolution_and_scale(game, config.width, config.height, config.font_scale)
+        if getattr(game, "hud_manager", None) is not None:
+            game.hud_manager.debugger = getattr(game, "ui_debugger", None)
         run_report["effective_font_scale"] = getattr(game, "effective_font_scale", None)
         ui_metrics = getattr(game, "ui_metrics", None)
         run_report["ui_scale"] = getattr(ui_metrics, "ui_scale", None)
@@ -232,6 +275,17 @@ def _run_single(config: RunConfig) -> tuple[bool, dict[str, Any]]:
                 run_report["mmo_skipped"] = mode_result.get("skipped_reason")
             if mode == "mmo" and mode_result.get("status") == "skipped" and config.mode == "mmo":
                 success = False
+        debugger = getattr(game, "ui_debugger", None)
+        if debugger is not None and debugger.log_enabled:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            layout_summary_path = config.output_dir / (
+                f"ui_layout_summary_{config.width}x{config.height}"
+                f"_fs{config.font_scale:.2f}_{stamp}.json"
+            )
+            final_path = debugger.finalize_run(layout_summary_path)
+            if final_path is not None:
+                layout_summary_path = final_path
+                run_report["layout_summary_path"] = str(final_path)
     except Exception:
         success = False
         run_report["exception"] = traceback.format_exc()
@@ -242,6 +296,15 @@ def _run_single(config: RunConfig) -> tuple[bool, dict[str, Any]]:
                 game.running = False
             except Exception:
                 pass
+            debugger = getattr(game, "ui_debugger", None)
+            if (
+                layout_summary_path is None
+                and debugger is not None
+                and debugger.log_enabled
+            ):
+                fallback = debugger.finalize_run(config.output_dir / "ui_layout_summary.json")
+                if fallback is not None:
+                    run_report["layout_summary_path"] = str(fallback)
         pygame.quit()
     return success, run_report
 
@@ -277,6 +340,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--screenshot", action="store_true")
+    parser.add_argument("--ui-debug", action="store_true", help="Enable UI debug layout logging.")
+    parser.add_argument(
+        "--ui-debug-frames",
+        action="store_true",
+        help="Include per-frame debug counters (larger logs).",
+    )
     return parser.parse_args(argv)
 
 
@@ -302,6 +371,8 @@ def _build_run_matrix(args: argparse.Namespace) -> list[RunConfig]:
                     mode=args.mode,
                     seed=int(args.seed),
                     screenshot=bool(args.screenshot),
+                    ui_debug=bool(args.ui_debug),
+                    ui_debug_frames=bool(args.ui_debug_frames),
                     output_dir=output_dir,
                     verbose=bool(args.verbose),
                 )

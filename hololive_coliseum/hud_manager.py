@@ -7,6 +7,7 @@ import math
 
 import pygame
 
+from .ui_debug import UIDebugger
 from .ui_metrics import UIMetrics
 
 
@@ -20,9 +21,33 @@ class HUDManager:
         self,
         font: pygame.font.Font | None = None,
         metrics: UIMetrics | None = None,
+        debugger: UIDebugger | None = None,
     ) -> None:
         self.font = font or pygame.font.SysFont(None, 24)
         self.metrics = metrics
+        self.debugger = debugger
+
+    def _debug_collect(
+        self,
+        name: str,
+        rect: pygame.Rect,
+        kind: str,
+        *,
+        bounds: pygame.Rect | None = None,
+        group: str | None = None,
+        text_size: tuple[int, int] | None = None,
+    ) -> None:
+        debugger = self.debugger
+        if debugger is None or not debugger.is_active:
+            return
+        meta: dict[str, object] = {}
+        if bounds is not None:
+            meta["bounds"] = pygame.Rect(bounds)
+        if group:
+            meta["group"] = group
+        if text_size:
+            meta["text_size"] = (int(text_size[0]), int(text_size[1]))
+        debugger.collect_rect(name, rect, kind, meta=meta)
 
     def _draw_text(
         self,
@@ -103,6 +128,16 @@ class HUDManager:
         metrics = self.metrics
         hud_pad = metrics.panel_pad if metrics else 10
         top_gap = metrics.pad(80) if metrics else 80
+        gutter = metrics.gutter if metrics else 10
+        screen_bounds = pygame.Rect(0, 0, screen.get_width(), screen.get_height())
+        safe_bounds = pygame.Rect(
+            gutter,
+            gutter,
+            max(0, screen.get_width() - gutter * 2),
+            max(0, screen.get_height() - gutter * 2),
+        )
+        self._debug_collect("hud.screen_bounds", screen_bounds, "bounds")
+        self._debug_collect("hud.safe_bounds", safe_bounds, "bounds", bounds=screen_bounds)
         player.draw_status(screen)
         if allies:
             self._draw_allies_panel(screen, allies)
@@ -124,8 +159,14 @@ class HUDManager:
         timer_x = screen.get_width() - (metrics.pad(120) if metrics else 120)
         timer_y = hud_pad
         self._draw_text(screen, timer_label, (255, 255, 255), (timer_x, timer_y))
+        timer_size = self.font.size(timer_label)
+        timer_rect = pygame.Rect(timer_x, timer_y, timer_size[0], timer_size[1])
+        self._debug_collect("hud.timer_label", timer_rect, "label", bounds=safe_bounds)
         score_label = f"Score: {score}"
         self._draw_text(screen, score_label, (255, 255, 255), (hud_pad, top_gap))
+        score_size = self.font.size(score_label)
+        score_rect = pygame.Rect(hud_pad, top_gap, score_size[0], score_size[1])
+        self._debug_collect("hud.score_label", score_rect, "label", bounds=safe_bounds)
         if combo > 1:
             self._draw_text(
                 screen,
@@ -146,6 +187,7 @@ class HUDManager:
             y = top_gap + (metrics.pad(30) if metrics else 30)
             height = len(objectives) * 15 + 10
             obj_rect = pygame.Rect(0, y - 5, screen.get_width(), height)
+            self._debug_collect("hud.objectives", obj_rect, "panel", bounds=screen_bounds)
             pulse = (math.sin(now / 700) + 1) * 0.5
             self._draw_panel(
                 screen,
@@ -212,6 +254,12 @@ class HUDManager:
             accent=(120, 200, 220),
             pulse=pulse,
         )
+        self._debug_collect(
+            "hud.sfx_debug",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+        )
         text = self._sfx_debug_text(label, profile, impact_scale)
         self._draw_text(
             screen,
@@ -260,6 +308,12 @@ class HUDManager:
             border=(80, 120, 160),
             accent=(130, 190, 220),
             pulse=pulse,
+        )
+        self._debug_collect(
+            "hud.allies",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
         )
         for idx, ally in enumerate(allies):
             name = getattr(ally, "display_name", None)
@@ -316,6 +370,12 @@ class HUDManager:
             accent=(110, 180, 210),
             pulse=pulse,
         )
+        self._debug_collect(
+            "hud.resource_panel",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+        )
         for idx, (label, value) in enumerate(summary):
             self._draw_text(
                 screen,
@@ -350,6 +410,12 @@ class HUDManager:
             border=border,
             accent=accent,
             pulse=pulse,
+        )
+        self._debug_collect(
+            "hud.threat_chip",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
         )
         label_text = label or "Stage"
         self._draw_text(
@@ -408,6 +474,12 @@ class HUDManager:
             accent=(120, 200, 160),
             pulse=pulse,
         )
+        self._debug_collect(
+            "hud.status_panel",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+        )
         for idx, line in enumerate(lines):
             self._draw_text(
                 screen,
@@ -438,6 +510,12 @@ class HUDManager:
             border=(80, 150, 200),
             accent=(150, 210, 240),
             pulse=pulse,
+        )
+        self._debug_collect(
+            "hud.insight_banner",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
         )
         for idx, line in enumerate(lines):
             self._draw_text(
@@ -480,6 +558,12 @@ class HUDManager:
             accent=(140, 200, 240),
             pulse=pulse,
         )
+        self._debug_collect(
+            "hud.auto_dev_panel",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+        )
         for idx, (label, value) in enumerate(summary):
             self._draw_text(
                 screen,
@@ -515,6 +599,12 @@ class HUDManager:
             border=(80, 120, 180),
             accent=(140, 200, 255),
             pulse=pulse,
+        )
+        self._debug_collect(
+            "hud.world_ticker",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
         )
         shadow = self.font.render(text, True, (10, 14, 22))
         screen.blit(shadow, (rect.x + padding + 2, rect.y + padding + 2))
@@ -554,6 +644,12 @@ class HUDManager:
             accent=(180, 220, 250),
             pulse=pulse,
         )
+        self._debug_collect(
+            "hud.hype_panel",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
+        )
         label_text = self.font.render(label, True, (230, 240, 250))
         screen.blit(label_text, (rect.x + 8, rect.y + 4))
         bar_rect = pygame.Rect(rect.x + 8, rect.y + 20, rect.width - 16, 8)
@@ -592,6 +688,12 @@ class HUDManager:
             border=(90, 130, 160),
             accent=(130, 190, 230),
             pulse=pulse,
+        )
+        self._debug_collect(
+            "hud.cooldown_panel",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
         )
         for idx, entry in enumerate(items):
             name = str(entry.get("name", "Skill"))
@@ -638,6 +740,12 @@ class HUDManager:
             border=(70, 110, 150),
             accent=(120, 190, 220),
             pulse=pulse,
+        )
+        self._debug_collect(
+            "hud.minimap",
+            rect,
+            "panel",
+            bounds=pygame.Rect(0, 0, screen.get_width(), screen.get_height()),
         )
         bounds = data.get("bounds") or (0.0, 1.0, 0.0, 1.0)
         min_x, max_x, min_y, max_y = bounds

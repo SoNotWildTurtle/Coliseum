@@ -1,0 +1,69 @@
+PowerShell: create branch → commit → push → open PR in browser (or via GitHub UI).
+
+Below is the exact command sequence you can run right now from your repo root to turn Codex’s changes into a PR.
+
+1) Make sure you’re on main and up to date
+git checkout main
+git pull
+2) Create the branch for #3
+git checkout -b chore/ui-smoke-runner
+3) Verify the files Codex changed are present
+git status
+git diff --stat
+
+You should see:
+
+hololive_coliseum/tools/ui_smoke_runner.py
+
+hololive_coliseum/tools_init_.py (or similar)
+
+tests/test_ui_smoke_runner.py
+
+4) Run the quick checks (optional but recommended since this is tooling)
+python -m compileall hololive_coliseum
+pytest -q tests/test_ui_smoke_runner.py
+5) Commit the changes
+git add -A
+git commit -m "Add headless UI smoke runner and test"
+6) Push the branch to GitHub
+git push -u origin chore/ui-smoke-runner
+7) Create the Pull Request (no CLI)
+Fastest: open PR page directly
+
+Run this (it copies the PR compare URL to your clipboard and prints it):
+
+${repo} = "sonotwildturtle/coliseum"
+${branch} = "chore/ui-smoke-runner"
+${url} = "https://github.com/$repo/compare/main...$branch?expand=1"
+Set-Clipboard -Value $url
+Write-Host $url
+
+Paste that URL into your browser, then click “Create pull request”.
+
+PR title + description to paste
+
+Title:
+Add headless UI smoke runner + minimal pytest wrapper
+
+Body (paste):
+
+Adds python -m hololive_coliseum.tools.ui_smoke_runner for headless UI smoke runs (menu/hud/mmo/all)
+
+Supports multi-res + multi-font-scale sweeps; writes per-run JSON reports (includes effective_font_scale + ui_scale)
+
+Adds fast pytest wrapper tests/test_ui_smoke_runner.py (kept minimal to avoid flake)
+
+Local sweep example:
+
+python -m hololive_coliseum.tools.ui_smoke_runner `
+  --res 1280x720 --res 1600x900 --res 1920x1080 `
+  --font-scale 0.9 --font-scale 1.0 --font-scale 1.25 `
+  --mode all --frames 60 `
+  --output-dir SavedGames/ui_smoke/sweep_$(Get-Date -Format "yyyyMMdd_HHmmss") `
+  --verbose
+
+Notes:
+
+MMO path works headlessly currently; runner includes skip/fallback if it becomes unavailable later
+
+Screenshots are opt-in (--screenshot) and disabled in test

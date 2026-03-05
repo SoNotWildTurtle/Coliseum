@@ -2210,6 +2210,14 @@ class GameMMOUI:
             panel_width,
             self.height - 20,
         )
+        debugger = getattr(self, "ui_debugger", None)
+        if debugger is not None and debugger.is_active:
+            debugger.collect_rect(
+                "mmo.overview_panel",
+                panel_rect,
+                "panel",
+                meta={"bounds": pygame.Rect(0, 0, self.width, self.height)},
+            )
         palette = self._mmo_draw_panel(panel_rect)
         x = panel_rect.x + 12
         y = panel_rect.y + 12

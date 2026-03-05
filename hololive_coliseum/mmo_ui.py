@@ -30,6 +30,10 @@ def draw_mmo_backdrop(game) -> None:
     """Draw the MMO hub background with gradient and subtle grid."""
     palette = mmo_palette()
     width, height = game.width, game.height
+    debugger = getattr(game, "ui_debugger", None)
+    if debugger is not None and debugger.is_active:
+        bounds = pygame.Rect(0, 0, width, height)
+        debugger.collect_rect("mmo.backdrop", bounds, "panel", meta={"bounds": bounds})
     top = palette["bg_top"]
     bottom = palette["bg_bottom"]
     for y in range(height):
@@ -72,6 +76,15 @@ def draw_mmo_header(
     now = pygame.time.get_ticks()
     bar_height = 64
     bar = pygame.Surface((game.width, bar_height), pygame.SRCALPHA)
+    debugger = getattr(game, "ui_debugger", None)
+    if debugger is not None and debugger.is_active:
+        header_rect = pygame.Rect(0, 0, game.width, bar_height)
+        debugger.collect_rect(
+            "mmo.header_bar",
+            header_rect,
+            "panel",
+            meta={"bounds": pygame.Rect(0, 0, game.width, game.height)},
+        )
     bar.fill((*palette["panel"], 232))
     pygame.draw.line(
         bar,
@@ -117,6 +130,14 @@ def draw_mmo_command_panel(
 ) -> None:
     """Draw a structured command guide panel."""
     palette = mmo_palette()
+    debugger = getattr(game, "ui_debugger", None)
+    if debugger is not None and debugger.is_active:
+        debugger.collect_rect(
+            "mmo.command_panel",
+            rect,
+            "panel",
+            meta={"bounds": pygame.Rect(0, 0, game.width, game.height)},
+        )
     panel = pygame.Surface(rect.size, pygame.SRCALPHA)
     panel.fill((*palette["panel"], 220))
     pygame.draw.rect(panel, palette["border"], panel.get_rect(), 2)
@@ -145,6 +166,14 @@ def draw_mmo_status_panel(
 ) -> None:
     """Draw a right-side status card for MMO telemetry."""
     palette = mmo_palette()
+    debugger = getattr(game, "ui_debugger", None)
+    if debugger is not None and debugger.is_active:
+        debugger.collect_rect(
+            "mmo.status_panel",
+            rect,
+            "panel",
+            meta={"bounds": pygame.Rect(0, 0, game.width, game.height)},
+        )
     panel = pygame.Surface(rect.size, pygame.SRCALPHA)
     panel.fill((*palette["panel_alt"], 230))
     pygame.draw.rect(panel, palette["border"], panel.get_rect(), 2)
@@ -174,6 +203,14 @@ def draw_mmo_footer(game, text: str) -> None:
     palette = mmo_palette()
     height = 34
     rect = pygame.Rect(0, game.height - height, game.width, height)
+    debugger = getattr(game, "ui_debugger", None)
+    if debugger is not None and debugger.is_active:
+        debugger.collect_rect(
+            "mmo.footer_bar",
+            rect,
+            "panel",
+            meta={"bounds": pygame.Rect(0, 0, game.width, game.height)},
+        )
     panel = pygame.Surface(rect.size, pygame.SRCALPHA)
     panel.fill((*palette["panel"], 224))
     pygame.draw.line(panel, palette["border"], (0, 0), (rect.width, 0), 2)

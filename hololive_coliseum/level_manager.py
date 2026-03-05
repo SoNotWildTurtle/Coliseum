@@ -17,6 +17,8 @@ class LevelManager:
         """Initialize or reset gameplay objects for the current selection."""
         g = self.game
         if getattr(g, "player", None) is not None:
+            if hasattr(g, "_save_profile_checkpoint"):
+                g._save_profile_checkpoint()
             save_inventory(g.player.inventory.to_dict())
             g.coins = g.player.currency_manager.get_balance()
         g.final_time = 0
@@ -57,9 +59,12 @@ class LevelManager:
         if getattr(g, "coins", 0):
             g.player.currency_manager.add(g.coins)
         g.player.platforms = g.platforms
-        inv = load_inventory()
-        if inv:
-            g.player.inventory.load_from_dict(inv)
+        if hasattr(g, "_hydrate_player_from_profile"):
+            g._hydrate_player_from_profile(g.player)
+        else:
+            inv = load_inventory()
+            if inv:
+                g.player.inventory.load_from_dict(inv)
         g.difficulty = g.difficulty_levels[g.difficulty_index]
         g.all_sprites = pygame.sprite.Group(g.player)
         g.projectiles = pygame.sprite.Group()

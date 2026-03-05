@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-01-01T00:00:00Z",
+  "updated_utc": "2026-01-01T00:00:00Z",
+  "profile_id": "legacy",
+  "data": {
+    "progression": {
+      "level": 2,
+      "xp": 15,
+      "threshold": 120
+    },
+    "inventory": {
+      "items": {
+        "potion": 3
+      },
+      "capacity": 30
+    },
+    "economy": {
+      "coins": 25
+    },
+    "achievements": {
+      "achievements": [
+        "First Blood"
+      ]
+    },
+    "reputation": {
+      "Arena": 5
+    },
+    "meta": {
+      "last_played_character": "Gawr Gura"
+    }
+  }
+}

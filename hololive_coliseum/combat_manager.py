@@ -37,6 +37,7 @@ class CombatManager:
         self.damage_manager = DamageManager()
         self.sound_manager = sound_manager
         self.last_enemy_damage = 0
+        self.event_sink = None
 
     def add(self, actor) -> None:
         """Add a combatant to the turn list."""
@@ -122,7 +123,13 @@ class CombatManager:
                                 target,
                                 getattr(proj, "knockback", 0.0),
                             )
-                            target.take_damage(dmg)
+                            self._apply_damage(
+                                getattr(proj, "owner", None) or player,
+                                target,
+                                dmg,
+                                kind="projectile",
+                                critical=critical,
+                            )
                             self._play_hit_sfx(dmg, critical)
                             if damage_numbers is not None:
                                 damage_numbers.add(
@@ -180,7 +187,13 @@ class CombatManager:
                             enemy,
                             getattr(proj, "knockback", 0.0),
                         )
-                        enemy.take_damage(dmg)
+                        self._apply_damage(
+                            attacker,
+                            enemy,
+                            dmg,
+                            kind="projectile",
+                            critical=critical,
+                        )
                         self._play_hit_sfx(dmg, critical)
                         if damage_numbers is not None:
                             damage_numbers.add(
@@ -228,7 +241,13 @@ class CombatManager:
                                     dmg, critical, base_ms=80
                                 ),
                             )
-                            target.take_damage(dmg)
+                            self._apply_damage(
+                                getattr(attack, "owner", None) or player,
+                                target,
+                                dmg,
+                                kind="melee",
+                                critical=critical,
+                            )
                             self._play_hit_sfx(dmg, critical)
                             if damage_numbers is not None:
                                 damage_numbers.add(
@@ -266,7 +285,13 @@ class CombatManager:
                         getattr(attack, "knockback", 0.0),
                         stagger_ms=self._stagger_duration(dmg, critical, base_ms=80),
                     )
-                    enemy.take_damage(dmg)
+                    self._apply_damage(
+                        attacker,
+                        enemy,
+                        dmg,
+                        kind="melee",
+                        critical=critical,
+                    )
                     self._play_hit_sfx(dmg, critical)
                     if damage_numbers is not None:
                         damage_numbers.add(
@@ -299,7 +324,13 @@ class CombatManager:
                         getattr(colliding, "touch_knockback", 1.5),
                         stagger_ms=self._stagger_duration(dmg, critical, base_ms=50),
                     )
-                    target.take_damage(dmg)
+                    self._apply_damage(
+                        colliding,
+                        target,
+                        dmg,
+                        kind="contact",
+                        critical=critical,
+                    )
                     self._play_hit_sfx(dmg, critical)
                     if damage_numbers is not None:
                         damage_numbers.add(
@@ -318,8 +349,36 @@ class CombatManager:
             event = "hit_heavy"
         if hasattr(self.sound_manager, "play_event"):
             self.sound_manager.play_event(event)
-        else:
-            self.sound_manager.play(event)
+
+    def _apply_damage(
+        self,
+        attacker,
+        target,
+        damage: int,
+        *,
+        kind: str,
+        critical: bool,
+    ) -> None:
+        hp_before = float(getattr(target, "health", 0))
+        target.take_damage(damage)
+        sink = self.event_sink
+        if callable(sink):
+            sink(
+                {
+                    "type": "damage",
+                    "payload": {
+                        "attacker_id": attacker.__class__.__name__
+                        if attacker is not None
+                        else "unknown",
+                        "target_id": target.__class__.__name__,
+                        "amount": float(damage),
+                        "kind": kind,
+                        "critical": bool(critical),
+                        "hp_before": hp_before,
+                        "hp_after": float(getattr(target, "health", 0)),
+                    },
+                }
+            )
 
     @staticmethod
     def _apply_knockback(

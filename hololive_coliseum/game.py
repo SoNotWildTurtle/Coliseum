@@ -138,6 +138,9 @@ from .ui_metrics import (
 )
 from .ui_debug import UIDebugger
 from .profile_store import Profile, ProfileStore
+from .event_bus import EventBus
+from .telemetry_logger import TelemetryLogger
+from .content_validator import validate_all
 
 
 CHARACTER_PLAN_FILE = os.path.join(
@@ -176,6 +179,14 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 os.environ["SDL_VIDEODRIVER"] = "dummy"
         pygame.init()
         self.settings = load_settings()
+        self.event_bus = EventBus()
+        self._event_frame = 0
+        self.telemetry_logger = TelemetryLogger.from_env(self.event_bus)
+        if os.environ.get("HOLO_VALIDATE_CONTENT", "0") == "1":
+            valid, errors = validate_all()
+            if not valid:
+                for err in errors:
+                    print(f"[CONTENT][WARN] {err}")
         self.coins = self.settings.get("coins", 0)
         self.profile_store = ProfileStore()
         self.profile_id = str(
@@ -1171,11 +1182,13 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.spawn_manager = SpawnManager()
         self.event_manager = EventManager()
         self.status_manager = StatusEffectManager()
+        self.status_manager.set_event_sink(self._publish_event)
         self.hazard_manager = HazardManager(       
             self.status_manager,
             analytics=self.auto_dev_manager,       
             objective_manager=self.objective_manager,
         )
+        self.hazard_manager.event_sink = self._publish_event
         self.vote_adjustments: dict[str, int] = {}
         arena_width = max(self.width + 600, int(self.width * 1.8))
         arena_height = self.height
@@ -1693,6 +1706,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             self.team_manager,
             sound_manager=self.sound_manager,
         )
+        self.combat_manager.event_sink = self._publish_event
         self.level_manager = LevelManager(self)
         self.autoplayer: AutoPlayer | None = (
             AutoPlayer(self, self.autoplay_tuning) if self.autoplay else None
@@ -5253,6 +5267,111 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         }.get(diff, 1.0)
         return max(1, int(rating * diff_mult))
 
+    def _publish_event(self, event: dict[str, object]) -> None:
+        """Publish a structured event to the optional internal event bus."""
+
+        if not self.event_bus.has_subscribers:
+            return
+        event_type = str(event.get("type", "unknown"))
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            payload = {"value": payload}
+        self.event_bus.publish(
+            {
+                "type": event_type,
+                "t": int(pygame.time.get_ticks()),
+                "frame": int(getattr(self, "_event_frame", 0)),
+                "payload": payload,
+            }
+        )
+
+    def _award_currency(self, amount: int, *, source: str) -> int:
+        player = getattr(self, "player", None)
+        if player is None:
+            return 0
+        amount = int(amount)
+        if amount == 0:
+            return player.currency_manager.get_balance()
+        balance = player.currency_manager.add(amount)
+        self._publish_event(
+            {
+                "type": "currency_delta",
+                "payload": {
+                    "delta": amount,
+                    "balance": int(balance),
+                    "source": source,
+                },
+            }
+        )
+        return balance
+
+    def _award_xp(self, amount: int, *, source: str) -> bool:
+        player = getattr(self, "player", None)
+        if player is None:
+            return False
+        amount = int(amount)
+        if amount == 0:
+            return False
+        leveled = bool(player.gain_xp(amount))
+        self._publish_event(
+            {
+                "type": "xp_delta",
+                "payload": {
+                    "delta": amount,
+                    "level": int(player.experience_manager.level),
+                    "xp": int(player.experience_manager.xp),
+                    "source": source,
+                    "leveled": leveled,
+                },
+            }
+        )
+        return leveled
+
+    def _modify_reputation(self, faction: str, amount: int, *, source: str) -> int:
+        value = self.reputation_manager.modify(faction, amount)
+        self._publish_event(
+            {
+                "type": "reputation_delta",
+                "payload": {
+                    "faction": str(faction),
+                    "delta": int(amount),
+                    "value": int(value),
+                    "source": source,
+                },
+            }
+        )
+        return value
+
+    def _record_objective_event(
+        self, event_name: str, amount: int = 1, *, source: str
+    ) -> list[dict[str, int]]:
+        before = {
+            key: (obj.progress, obj.rewarded)
+            for key, obj in self.objective_manager.objectives.items()
+        }
+        rewards = self.objective_manager.record_event(event_name, amount)
+        tracked = self.objective_manager.EVENT_MAP.get(event_name, ())
+        for key in tracked:
+            obj = self.objective_manager.objectives.get(key)
+            if obj is None:
+                continue
+            prev_progress, prev_rewarded = before.get(key, (0, False))
+            if obj.progress != prev_progress or obj.rewarded != prev_rewarded:
+                self._publish_event(
+                    {
+                        "type": "objective_progress",
+                        "payload": {
+                            "event": event_name,
+                            "objective": key,
+                            "progress": int(obj.progress),
+                            "target": int(obj.target),
+                            "rewarded": bool(obj.rewarded),
+                            "source": source,
+                        },
+                    }
+                )
+        return rewards
+
     def _handle_collisions(self) -> None:
         """Delegate collision handling to :class:`CombatManager`."""       
         now = pygame.time.get_ticks()
@@ -5287,30 +5406,35 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             self.score += count
             if self.holo_hype_active:
                 self.score_manager.add(5 * count)
-            self.player.currency_manager.add(count)
+            self._award_currency(count, source="enemy_kill")
             self.kills += count
             rewards = []
             if count:
                 rewards.extend(
-                    self.objective_manager.record_event(
-                        "enemy_defeated", count
+                    self._record_objective_event(
+                        "enemy_defeated",
+                        count,
+                        source="enemy_kill",
                     )
                 )
                 rewards.extend(
-                    self.objective_manager.record_event(
-                        "coin_collected", count
+                    self._record_objective_event(
+                        "coin_collected",
+                        count,
+                        source="enemy_kill",
                     )
                 )
             for enemy in killed:
                 loot = self.loot_manager.roll_loot(enemy.__class__.__name__)
                 if loot:
                     self.player.inventory.add(loot)
-                self.reputation_manager.modify(
+                self._modify_reputation(
                     getattr(enemy, "faction", "Arena"),
                     getattr(enemy, "reputation_reward", 5),
+                    source="enemy_kill",
                 )
             xp_gain = max(1, int(sum(self._xp_for_enemy(enemy) for enemy in killed)))
-            self.player.gain_xp(xp_gain)
+            self._award_xp(xp_gain, source="enemy_kill")
             if rewards:
                 self._apply_objective_rewards(rewards)
             if (
@@ -5318,6 +5442,15 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 and not self.achievement_manager.is_unlocked("First Blood")
             ):
                 self.achievement_manager.unlock("First Blood")
+                self._publish_event(
+                    {
+                        "type": "achievement_unlocked",
+                        "payload": {
+                            "id": "First Blood",
+                            "source": "enemy_kill",
+                        },
+                    }
+                )
             if self.kills == 5:
                 self.holo_sign_until = now + 1800
                 self.holo_audience_until = now + 2000
@@ -5340,7 +5473,20 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 continue
             self._autoplay_record_feature(f"powerup:{p.effect}")
             if p.effect == "heal":
+                hp_before = float(self.player.health)
                 self.player.health = self.player.max_health
+                self._publish_event(
+                    {
+                        "type": "heal",
+                        "payload": {
+                            "source": "powerup:heal",
+                            "target_id": self.player.__class__.__name__,
+                            "amount": float(max(0, self.player.health - hp_before)),
+                            "hp_before": hp_before,
+                            "hp_after": float(self.player.health),
+                        },
+                    }
+                )
             elif p.effect == "mana":
                 self.player.mana = self.player.max_mana
             elif p.effect == "stamina":
@@ -5356,7 +5502,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             elif p.effect == "defense":
                 self.status_manager.add_effect(self.player, DefenseEffect())
             elif p.effect == "xp":
-                self.player.gain_xp(50)
+                self._award_xp(50, source="powerup")
             elif p.effect == "life":
                 self.player.lives += 1
             cheer_map = {
@@ -5377,7 +5523,10 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                     (self.player.rect.centerx, self.player.rect.top - 24),
                 )
             self.event_manager.trigger(f"pickup_{p.effect}")
-            rewards = self.objective_manager.record_event("powerup_collected")
+            rewards = self._record_objective_event(
+                "powerup_collected",
+                source="powerup",
+            )
             if rewards:
                 self._apply_objective_rewards(rewards)
             p.kill()
@@ -5392,9 +5541,9 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             coins = int(reward.get("coins", 0))
             xp = int(reward.get("xp", 0))
             if coins:
-                player.currency_manager.add(coins)
+                self._award_currency(coins, source="objective_reward")
             if xp:
-                player.gain_xp(xp)
+                self._award_xp(xp, source="objective_reward")
         self._autosave_profile_if_enabled()
 
     def _bootstrap_profile_from_legacy_settings(self) -> None:
@@ -5561,6 +5710,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.running = True
         frame_index = 0
         while self.running:
+            self._event_frame = int(frame_index)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
@@ -7168,8 +7318,9 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                             "account": self.account_id,
                         }
                     )
-                    victory_rewards = self.objective_manager.record_event(
-                        "match_victory"
+                    victory_rewards = self._record_objective_event(
+                        "match_victory",
+                        source="match_end",
                     )
                     if victory_rewards:
                         self._apply_objective_rewards(victory_rewards)
@@ -7298,6 +7449,8 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         if self.mining_enabled:
             self.mining_manager.stop()
         self.mmo_backend.close()
+        if self.telemetry_logger is not None:
+            self.telemetry_logger.close()
         pygame.quit()
 
     def _hud_resource_summary(self) -> list[tuple[str, object]]:

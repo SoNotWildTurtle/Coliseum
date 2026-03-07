@@ -140,7 +140,22 @@ class PoisonEffect(StatusEffect):
     def update(self, target, now: int) -> None:
         if now - self._last_tick >= self.interval_ms:
             if hasattr(target, "take_damage"):
+                hp_before = float(getattr(target, "health", 0))
                 target.take_damage(self.damage)
+                sink = getattr(self, "_event_sink", None)
+                if callable(sink):
+                    sink(
+                        {
+                            "type": "status_tick",
+                            "payload": {
+                                "kind": "poison",
+                                "target_id": target.__class__.__name__,
+                                "amount": float(self.damage),
+                                "hp_before": hp_before,
+                                "hp_after": float(getattr(target, "health", 0)),
+                            },
+                        }
+                    )
             self._last_tick = now
 
 
@@ -161,7 +176,22 @@ class BurnEffect(StatusEffect):
     def update(self, target, now: int) -> None:
         if now - self._last_tick >= self.interval_ms:
             if hasattr(target, "take_damage"):
+                hp_before = float(getattr(target, "health", 0))
                 target.take_damage(self.damage)
+                sink = getattr(self, "_event_sink", None)
+                if callable(sink):
+                    sink(
+                        {
+                            "type": "status_tick",
+                            "payload": {
+                                "kind": "burn",
+                                "target_id": target.__class__.__name__,
+                                "amount": float(self.damage),
+                                "hp_before": hp_before,
+                                "hp_after": float(getattr(target, "health", 0)),
+                            },
+                        }
+                    )
             self._last_tick = now
 
 
@@ -199,8 +229,13 @@ class StatusEffectManager:
 
     def __init__(self) -> None:
         self._effects: list[tuple[object, StatusEffect]] = []
+        self.event_sink = None
+
+    def set_event_sink(self, sink) -> None:
+        self.event_sink = sink
 
     def add_effect(self, target, effect: StatusEffect) -> None:
+        setattr(effect, "_event_sink", self.event_sink)
         effect.apply(target)
         self._effects.append((target, effect))
 

@@ -47,6 +47,40 @@ Stress config (useful for overflow/collision checks with UI debug logging):
 python -m hololive_coliseum.tools.ui_smoke_runner --res 1024x576 --font-scale 1.25 --mode all --frames 60 --ui-debug
 ```
 
+## Systems foundation tooling
+
+Enable event telemetry (JSONL under `SavedGames/telemetry/`):
+
+```
+$env:HOLO_TELEMETRY=1
+python main.py
+```
+
+Run deterministic balance sweep aggregation:
+
+```
+python -m hololive_coliseum.tools.balance_sweep --seeds 100-105 --frames 120
+```
+
+Headless sweep with telemetry enabled:
+
+```
+$env:HOLO_TELEMETRY=1
+python -m hololive_coliseum.tools.balance_sweep --seeds 100-101 --frames 60
+```
+
+Replay/analyze generated telemetry JSONL:
+
+```
+python -m hololive_coliseum.tools.telemetry_replay --input SavedGames/telemetry --strict
+```
+
+Validate content schemas:
+
+```
+python -m hololive_coliseum.content_validator --strict
+```
+
 ## MMO hub checklist
 
 Use this when touching MMO hub logic, flow, or UI:

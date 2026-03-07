@@ -11,5 +11,7 @@ Profile progression now uses a versioned profile store:
 - Save path: `SavedGames/profiles/<profile_id>/profile.json`
 - Rolling backup: `profile.json.bak`
 - Atomic save writes through `profile.json.tmp` then `os.replace`
+- Profile sections include inventory, economy, progression, reputation,
+  achievements, objectives, and profile metadata.
 - CLI utility:
   `python -m hololive_coliseum.profile_store --profile default --print --validate`

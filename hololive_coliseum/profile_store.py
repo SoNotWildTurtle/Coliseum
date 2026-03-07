@@ -16,7 +16,7 @@ from typing import Any
 
 from . import save_manager
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def _utc_now() -> str:
@@ -66,6 +66,7 @@ class Profile:
     economy: dict[str, Any]
     achievements: dict[str, Any]
     reputation: dict[str, Any]
+    objectives: dict[str, Any]
     meta: dict[str, Any]
     validation_warnings: list[str] = field(default_factory=list)
     raw_payload: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -85,6 +86,7 @@ class Profile:
         data["economy"] = copy.deepcopy(self.economy)
         data["achievements"] = copy.deepcopy(self.achievements)
         data["reputation"] = copy.deepcopy(self.reputation)
+        data["objectives"] = copy.deepcopy(self.objectives)
         data["meta"] = copy.deepcopy(self.meta)
         return payload
 
@@ -111,6 +113,12 @@ def default_profile(profile_id: str | None = None) -> Profile:
         economy={"balances": {"coins": 0}},
         achievements={"unlocked_ids": [], "unlocked_utc": {}},
         reputation={"factions": {}},
+        objectives={
+            "region_key": None,
+            "region_name": "Arena",
+            "region_biome": "arena",
+            "objectives": {},
+        },
         meta={
             "profile_display_name": "Player",
             "last_played_character": "",
@@ -171,9 +179,32 @@ def migrate_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def migrate_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
+    """Migrate schema v3 payloads to v4 while preserving unknown fields."""
+
+    out = copy.deepcopy(payload)
+    data = out.setdefault("data", {})
+    if not isinstance(data, dict):
+        data = {}
+        out["data"] = data
+    objectives = data.get("objectives")
+    if not isinstance(objectives, dict):
+        objectives = {}
+    objectives.setdefault("region_key", None)
+    objectives.setdefault("region_name", "Arena")
+    objectives.setdefault("region_biome", "arena")
+    raw_objectives = objectives.get("objectives")
+    if not isinstance(raw_objectives, dict):
+        objectives["objectives"] = {}
+    data["objectives"] = objectives
+    out["schema_version"] = 4
+    return out
+
+
 _MIGRATIONS: dict[int, Any] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
+    3: migrate_v3_to_v4,
 }
 
 
@@ -305,6 +336,44 @@ def _validate_payload(
     }
     data["reputation"] = reputation
 
+    objectives = data.get("objectives")
+    if not isinstance(objectives, dict):
+        objectives = {}
+    objectives["region_key"] = (
+        None
+        if objectives.get("region_key") is None
+        else str(objectives.get("region_key"))
+    )
+    objectives["region_name"] = str(objectives.get("region_name", "Arena") or "Arena")
+    objectives["region_biome"] = str(
+        objectives.get("region_biome", "arena") or "arena"
+    )
+    raw_objectives = objectives.get("objectives")
+    if not isinstance(raw_objectives, dict):
+        raw_objectives = {}
+    normalized_objectives: dict[str, Any] = {}
+    for key, value in raw_objectives.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            warnings.append("objectives entry was invalid and was ignored")
+            continue
+        entry = dict(value)
+        entry["description"] = str(entry.get("description", ""))
+        entry["target"] = _clamp_int(entry.get("target"), 0, 1_000_000, 0)
+        entry["progress"] = _clamp_int(entry.get("progress"), 0, 1_000_000, 0)
+        entry["scope"] = str(entry.get("scope", "daily") or "daily")
+        rewards = entry.get("rewards")
+        if not isinstance(rewards, dict):
+            rewards = {}
+        entry["rewards"] = {
+            str(r_key): max(0, _as_int(r_value, 0))
+            for r_key, r_value in rewards.items()
+            if isinstance(r_key, str)
+        }
+        entry["rewarded"] = bool(entry.get("rewarded", False))
+        normalized_objectives[key] = entry
+    objectives["objectives"] = normalized_objectives
+    data["objectives"] = objectives
+
     meta = data.get("meta")
     if not isinstance(meta, dict):
         meta = {}
@@ -331,6 +400,7 @@ def _payload_to_profile(payload: dict[str, Any], warnings: list[str]) -> Profile
         economy=copy.deepcopy(data.get("economy", {})),
         achievements=copy.deepcopy(data.get("achievements", {})),
         reputation=copy.deepcopy(data.get("reputation", {})),
+        objectives=copy.deepcopy(data.get("objectives", {})),
         meta=copy.deepcopy(data.get("meta", {})),
         validation_warnings=list(warnings),
         raw_payload=copy.deepcopy(payload),
@@ -351,6 +421,11 @@ class ProfileStore:
         profile_dir = self.load_root / pid
         profile_dir.mkdir(parents=True, exist_ok=True)
         return profile_dir / "profile.json", profile_dir / "profile.json.bak"
+
+    def migrate(self, save_dict: dict[str, Any]) -> dict[str, Any]:
+        """Return a migrated payload upgraded to the current schema."""
+
+        return _run_migrations(save_dict)
 
     def load(self, profile_id: str | None = None) -> Profile:
         """Load, migrate, validate, and return a profile."""
@@ -394,23 +469,57 @@ class ProfileStore:
             self.save(profile)
         return profile
 
-    def save(self, profile: Profile) -> None:
-        """Atomically persist ``profile`` and maintain a rolling backup."""
+    def save(
+        self,
+        profile: Profile | str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        """Atomically persist a ``Profile`` or ``profile_id`` + ``data`` payload."""
 
-        profile.profile_id = _sanitize_profile_id(profile.profile_id)
-        profile.schema_version = CURRENT_SCHEMA_VERSION
-        if not profile.created_utc:
-            profile.created_utc = _utc_now()
-        profile.updated_utc = _utc_now()
+        if isinstance(profile, Profile):
+            profile_obj = profile
+        else:
+            profile_obj = default_profile(profile)
+            if isinstance(data, dict):
+                source_data = data.get("data", data)
+                if not isinstance(source_data, dict):
+                    source_data = {}
+                profile_obj.progression = copy.deepcopy(
+                    source_data.get("progression", profile_obj.progression)
+                )
+                profile_obj.inventory = copy.deepcopy(
+                    source_data.get("inventory", profile_obj.inventory)
+                )
+                profile_obj.economy = copy.deepcopy(
+                    source_data.get("economy", profile_obj.economy)
+                )
+                profile_obj.achievements = copy.deepcopy(
+                    source_data.get("achievements", profile_obj.achievements)
+                )
+                profile_obj.reputation = copy.deepcopy(
+                    source_data.get("reputation", profile_obj.reputation)
+                )
+                profile_obj.objectives = copy.deepcopy(
+                    source_data.get("objectives", profile_obj.objectives)
+                )
+                profile_obj.meta = copy.deepcopy(source_data.get("meta", profile_obj.meta))
+                if data.get("created_utc"):
+                    profile_obj.created_utc = str(data.get("created_utc"))
+
+        profile_obj.profile_id = _sanitize_profile_id(profile_obj.profile_id)
+        profile_obj.schema_version = CURRENT_SCHEMA_VERSION
+        if not profile_obj.created_utc:
+            profile_obj.created_utc = _utc_now()
+        profile_obj.updated_utc = _utc_now()
         payload, warnings = _validate_payload(
-            profile.to_dict(),
-            profile_id=profile.profile_id,
+            profile_obj.to_dict(),
+            profile_id=profile_obj.profile_id,
         )
-        merged_warnings = list(profile.validation_warnings)
+        merged_warnings = list(profile_obj.validation_warnings)
         merged_warnings.extend(item for item in warnings if item not in merged_warnings)
-        profile.validation_warnings = merged_warnings
-        profile.raw_payload = copy.deepcopy(payload)
-        profile_path, backup_path = self._profile_paths(profile.profile_id)
+        profile_obj.validation_warnings = merged_warnings
+        profile_obj.raw_payload = copy.deepcopy(payload)
+        profile_path, backup_path = self._profile_paths(profile_obj.profile_id)
         temp_path = profile_path.with_suffix(".json.tmp")
         payload_json = json.dumps(payload, indent=2, sort_keys=True)
         with temp_path.open("w", encoding="utf-8") as handle:

@@ -17,6 +17,21 @@ def test_profile_round_trip(tmp_path) -> None:
     profile.economy["balances"]["coins"] = 123
     profile.achievements["unlocked_ids"] = ["First Blood"]
     profile.reputation["factions"] = {"Arena": 9}
+    profile.objectives = {
+        "region_key": "arena_seed",
+        "region_name": "Arena",
+        "region_biome": "arena",
+        "objectives": {
+            "defeat_enemies": {
+                "description": "Defeat 5 foes",
+                "target": 5,
+                "progress": 3,
+                "scope": "daily",
+                "rewards": {"coins": 10},
+                "rewarded": False,
+            }
+        },
+    }
     store.save(profile)
 
     loaded = store.load("player_one")
@@ -27,6 +42,7 @@ def test_profile_round_trip(tmp_path) -> None:
     assert loaded.economy["balances"]["coins"] == 123
     assert loaded.achievements["unlocked_ids"] == ["First Blood"]
     assert loaded.reputation["factions"]["Arena"] == 9
+    assert loaded.objectives["objectives"]["defeat_enemies"]["progress"] == 3
 
 
 def test_profile_migrates_v1_fixture(tmp_path) -> None:
@@ -38,10 +54,11 @@ def test_profile_migrates_v1_fixture(tmp_path) -> None:
 
     store = ProfileStore(load_root=tmp_path / "profiles")
     profile = store.load("legacy")
-    assert profile.schema_version == 3
+    assert profile.schema_version == 4
     assert profile.economy["balances"]["coins"] == 25
     assert profile.progression["unlocks"]["mmo_unlocked"] is False
     assert "profile_display_name" in profile.meta
+    assert "objectives" in profile.objectives
 
 
 def test_profile_corruption_falls_back_to_backup(tmp_path) -> None:
@@ -63,12 +80,17 @@ def test_profile_validation_clamps_invalid_values(tmp_path) -> None:
     profile_dir = tmp_path / "profiles" / "clamp"
     profile_dir.mkdir(parents=True, exist_ok=True)
     invalid_payload = {
-        "schema_version": 3,
+        "schema_version": 4,
         "profile_id": "clamp",
         "data": {
             "inventory": {"items": {"potion": -4}},
             "economy": {"balances": {"coins": -100}},
             "progression": {"level": -9, "xp": -25, "threshold": 0},
+            "objectives": {
+                "objectives": {
+                    "broken": {"target": -3, "progress": -2, "rewards": {"coins": -2}}
+                }
+            },
         },
     }
     (profile_dir / "profile.json").write_text(
@@ -83,4 +105,24 @@ def test_profile_validation_clamps_invalid_values(tmp_path) -> None:
     assert loaded.progression["level"] == 1
     assert loaded.progression["xp"] == 0
     assert loaded.progression["threshold"] == 1
+    objective = loaded.objectives["objectives"]["broken"]
+    assert objective["target"] == 0
+    assert objective["progress"] == 0
+    assert objective["rewards"]["coins"] == 0
     assert loaded.validation_warnings
+
+
+def test_profile_store_accepts_profile_id_plus_data(tmp_path) -> None:
+    store = ProfileStore(load_root=tmp_path / "profiles")
+    store.save(
+        "api_profile",
+        {
+            "data": {
+                "economy": {"balances": {"coins": 77}},
+                "inventory": {"items": {"potion": 2}, "capacity": 10},
+            }
+        },
+    )
+    loaded = store.load("api_profile")
+    assert loaded.economy["balances"]["coins"] == 77
+    assert loaded.inventory["items"]["potion"] == 2

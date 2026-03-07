@@ -185,6 +185,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         )
         self.profile: Profile = self.profile_store.load(self.profile_id)
         self.profile_warnings: list[str] = list(self.profile.validation_warnings)
+        self.profile_autosave = os.environ.get("HOLO_AUTOSAVE", "0") == "1"
         self._bootstrap_profile_from_legacy_settings()
         self._apply_profile_to_global_progression()
         self.width = self.settings.get("width", width)
@@ -479,9 +480,11 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             self.profile.reputation.get("factions", {})
         )
         self.objective_manager = ObjectiveManager()
-        self.objective_manager.load_from_dict(
-            self.settings.get("objectives", {})
-        )
+        profile_objectives = self.profile.objectives
+        if isinstance(profile_objectives, dict) and profile_objectives:
+            self.objective_manager.load_from_dict(profile_objectives)
+        else:
+            self.objective_manager.load_from_dict(self.settings.get("objectives", {}))
         self.economy_manager = EconomyManager()
         self.mmo_factions = [
             "Celestial Guard",
@@ -5392,6 +5395,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 player.currency_manager.add(coins)
             if xp:
                 player.gain_xp(xp)
+        self._autosave_profile_if_enabled()
 
     def _bootstrap_profile_from_legacy_settings(self) -> None:
         """Seed an empty profile from legacy settings/inventory files."""
@@ -5431,6 +5435,9 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 for k, v in legacy_reputation.items()
                 if isinstance(k, str)
             }
+        legacy_objectives = self.settings.get("objectives", {})
+        if isinstance(legacy_objectives, dict) and legacy_objectives:
+            self.profile.objectives = dict(legacy_objectives)
         if self.settings.get("mmo_unlocked"):
             self.profile.progression.setdefault("unlocks", {})
             self.profile.progression["unlocks"]["mmo_unlocked"] = True
@@ -5493,6 +5500,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         economy = dict(self.profile.economy)
         achievements = dict(self.profile.achievements)
         reputation = dict(self.profile.reputation)
+        objectives = dict(self.profile.objectives)
         meta = dict(self.profile.meta)
         if player is not None:
             inventory["items"] = player.inventory.to_dict()
@@ -5510,6 +5518,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         progression["unlocks"]["mmo_unlocked"] = bool(self.mmo_unlocked)
         achievements["unlocked_ids"] = sorted(self.achievement_manager.unlocked)
         reputation["factions"] = self.reputation_manager.to_dict()
+        objectives = self.objective_manager.to_dict()
         meta["last_played_character"] = str(self.selected_character or "")
         meta["last_played_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         meta["session_count"] = int(meta.get("session_count", 0)) + 1
@@ -5523,17 +5532,29 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             economy=economy,
             achievements=achievements,
             reputation=reputation,
+            objectives=objectives,
             meta=meta,
             validation_warnings=[],
             raw_payload=dict(self.profile.raw_payload),
         )
 
-    def _save_profile_checkpoint(self) -> None:
+    def save_profile(self) -> None:
         """Persist profile state for exit/checkpoint saves."""
 
         snapshot = self._build_profile_snapshot()
         self.profile_store.save(snapshot)
         self.profile = snapshot
+
+    def _save_profile_checkpoint(self) -> None:
+        """Backward-compatible alias for profile persistence calls."""
+
+        self.save_profile()
+
+    def _autosave_profile_if_enabled(self) -> None:
+        """Persist profile when autosave is enabled via ``HOLO_AUTOSAVE=1``."""
+
+        if self.profile_autosave:
+            self.save_profile()
 
     def run(self):
         """Start the main game loop."""

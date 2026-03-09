@@ -81,6 +81,21 @@ Validate content schemas:
 python -m hololive_coliseum.content_validator --strict
 ```
 
+## Profile persistence checks
+
+Inspect and validate a profile save without booting Pygame:
+
+```
+python -m hololive_coliseum.profile_store --profile default --validate --print
+```
+
+Reset and export profile data:
+
+```
+python -m hololive_coliseum.profile_store --profile default --reset
+python -m hololive_coliseum.profile_store --profile default --export SavedGames/profiles/default/export.json
+```
+
 ## MMO hub checklist
 
 Use this when touching MMO hub logic, flow, or UI:

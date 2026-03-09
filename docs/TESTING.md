@@ -81,6 +81,27 @@ Validate content schemas:
 python -m hololive_coliseum.content_validator --strict
 ```
 
+## Episode runner
+
+Run one deterministic headless arena episode:
+
+```
+python -m hololive_coliseum.tools.episode_runner --scenario basic --frames 120 --seed 1337 --headless
+```
+
+Compare signatures across branches/runs:
+
+```
+python -m hololive_coliseum.tools.episode_runner --scenario basic --frames 120 --seed 1337 --output-dir SavedGames/episodes/basic_1337
+python -m hololive_coliseum.tools.episode_runner --scenario basic --frames 120 --seed 1337 --output-dir SavedGames/episodes/basic_1337_repeat
+```
+
+Enable event trace JSONL output:
+
+```
+python -m hololive_coliseum.tools.episode_runner --scenario basic --frames 120 --seed 1337 --trace --trace-level minimal
+```
+
 ## Profile persistence checks
 
 Inspect and validate a profile save without booting Pygame:

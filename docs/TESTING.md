@@ -102,6 +102,20 @@ Enable event trace JSONL output:
 python -m hololive_coliseum.tools.episode_runner --scenario basic --frames 120 --seed 1337 --trace --trace-level minimal
 ```
 
+## Playtest agent mode
+
+Enable live playtest telemetry + snapshots while playing:
+
+```
+.\scripts\run_playtest.ps1
+```
+
+In another terminal, tail the latest playtest session and emit advice:
+
+```
+.\scripts\run_playtest_agent.ps1
+```
+
 ## Profile persistence checks
 
 Inspect and validate a profile save without booting Pygame:

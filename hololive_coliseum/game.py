@@ -5,6 +5,7 @@ import random
 import math
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import pygame
 from cryptography.hazmat.primitives import serialization
 
@@ -142,6 +143,7 @@ from .profile_adapters import export_profile_data, hydrate_profile_data
 from .event_bus import EventBus
 from .telemetry_logger import TelemetryLogger
 from .content_validator import validate_all
+from .playtest_snapshot import SnapshotEmitter
 
 
 CHARACTER_PLAN_FILE = os.path.join(
@@ -182,7 +184,28 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.settings = load_settings()
         self.event_bus = EventBus()
         self._event_frame = 0
+        self.playtest_snapshot_emitter: SnapshotEmitter | None = None
+        self.playtest_session_dir: str | None = None
         self.telemetry_logger = TelemetryLogger.from_env(self.event_bus)
+        if os.environ.get("HOLO_PLAYTEST", "0") == "1":
+            emitter = SnapshotEmitter.from_env(self)
+            if emitter is not None:
+                self.playtest_snapshot_emitter = emitter
+                self.playtest_session_dir = str(emitter.output_dir)
+                emitter.bind_event_bus(self.event_bus)
+                events_dir = Path(self.playtest_session_dir) / "events"
+                if self.telemetry_logger is not None:
+                    self.telemetry_logger.close()
+                    self.telemetry_logger = None
+                self.telemetry_logger = TelemetryLogger.from_env(
+                    self.event_bus,
+                    output_dir=events_dir,
+                )
+                if self.telemetry_logger is None:
+                    self.telemetry_logger = TelemetryLogger(
+                        self.event_bus,
+                        output_dir=events_dir,
+                    )
         if os.environ.get("HOLO_VALIDATE_CONTENT", "0") == "1":
             valid, errors = validate_all()
             if not valid:
@@ -7314,6 +7337,11 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 )
                 self.ui_debugger.flush_frame(frame_index)
             self._poll_network()
+            if self.playtest_snapshot_emitter is not None:
+                self.playtest_snapshot_emitter.tick(
+                    frame_index,
+                    int(pygame.time.get_ticks()),
+                )
 
             pygame.display.flip()
             self.clock.tick(60)
@@ -7407,6 +7435,8 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         if self.mining_enabled:
             self.mining_manager.stop()
         self.mmo_backend.close()
+        if self.playtest_snapshot_emitter is not None:
+            self.playtest_snapshot_emitter.close()
         if self.telemetry_logger is not None:
             self.telemetry_logger.close()
         pygame.quit()

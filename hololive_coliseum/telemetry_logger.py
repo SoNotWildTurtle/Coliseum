@@ -42,7 +42,12 @@ class TelemetryLogger:
         event_bus.subscribe("*", self.on_event)
 
     @classmethod
-    def from_env(cls, event_bus) -> "TelemetryLogger | None":
+    def from_env(
+        cls,
+        event_bus,
+        *,
+        output_dir: str | os.PathLike[str] | None = None,
+    ) -> "TelemetryLogger | None":
         if os.environ.get("HOLO_TELEMETRY", "0") != "1":
             return None
         raw = os.environ.get("HOLO_TELEMETRY_FILTER", "").strip()
@@ -51,6 +56,7 @@ class TelemetryLogger:
         strict_schema = os.environ.get("HOLO_TELEMETRY_STRICT", "0") == "1"
         return cls(
             event_bus,
+            output_dir=output_dir,
             filter_types=filter_types,
             validate_schema=validate_schema,
             strict_schema=strict_schema,

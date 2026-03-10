@@ -28,16 +28,20 @@ def test_objective_state_round_trips_through_export_and_profile_store(tmp_path) 
     manager.record_event(event_name, max(1, min(daily.target, 3)))
 
     exported = manager.export_state()
+    assert exported["daily_objectives"]
+    assert exported["weekly_objectives"]
+    assert exported["last_daily_key"] == "2026-03-10"
+    assert exported["last_weekly_key"] == "2026-W11"
     restored = ObjectiveManager(time_provider=provider)
     restored.import_state(exported)
     assert restored.export_state() == exported
 
     store = ProfileStore(load_root=tmp_path / "profiles")
     profile = default_profile("objectives")
-    profile.objectives = exported
-    store.save(profile)
+    profile["data"]["objectives"] = exported
+    store.save("objectives", profile)
 
-    loaded = store.load("objectives")
+    loaded, _warnings = store.load("objectives")
     rehydrated = ObjectiveManager(time_provider=provider)
-    rehydrated.import_state(loaded.objectives)
+    rehydrated.import_state(loaded["data"]["objectives"])
     assert rehydrated.export_state() == exported

@@ -32,11 +32,20 @@ def test_record_event_rewards_only_once() -> None:
         reward_sink=lambda reward, objective: awarded.append(dict(reward)),
     )
     manager.ensure_region_objectives({"name": "Arena"})
-    objective = next(obj for obj in manager.objectives.values() if obj.objective_type == "earn_coins")
-    updates = manager.record_event("coins_earned", objective.target)
+    objective = next(
+        obj
+        for obj in manager.objectives.values()
+        if obj.objective_type in {"earn_coins", "defeat_enemies", "collect_powerups"}
+    )
+    event_name = {
+        "earn_coins": "coins_earned",
+        "defeat_enemies": "enemy_defeated",
+        "collect_powerups": "powerup_collected",
+    }[objective.objective_type]
+    updates = manager.record_event(event_name, objective.target)
     assert updates and updates[0].completed is True
     assert len(awarded) == 1
-    manager.record_event("coins_earned", 1)
+    manager.record_event(event_name, 1)
     assert len(awarded) == 1
 
 

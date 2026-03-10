@@ -56,6 +56,32 @@ class ObjectiveUpdate:
     completed: bool
     rewarded: bool
 
+    @property
+    def kind(self) -> str:
+        return self.objective_type
+
+    @property
+    def delta(self) -> int:
+        return self.progress_delta
+
+    @property
+    def completed_now(self) -> bool:
+        return self.completed
+
+    def to_dict(self) -> Dict[str, object]:
+        """Return a JSON-safe update payload."""
+
+        return {
+            "objective_id": self.objective_id,
+            "period": self.period,
+            "kind": self.objective_type,
+            "delta": int(self.progress_delta),
+            "progress": int(self.progress),
+            "target": int(self.target),
+            "completed_now": bool(self.completed),
+            "rewarded": bool(self.rewarded),
+        }
+
 
 @dataclass
 class Objective:
@@ -71,8 +97,13 @@ class Objective:
     reward: Dict[str, int] = field(default_factory=dict)
     created_utc: str = ""
     expires_utc: str = ""
+    created_day_key: str | None = None
+    created_week_key: str | None = None
+    expires_day_key: str | None = None
+    expires_week_key: str | None = None
     completed: bool = False
     completed_utc: str | None = None
+    completed_day_key: str | None = None
     rewarded: bool = False
     metadata: Dict[str, object] = field(default_factory=dict)
 
@@ -88,12 +119,29 @@ class Objective:
     def rewards(self) -> Dict[str, int]:
         return self.reward
 
+    @property
+    def kind(self) -> str:
+        return self.objective_type
+
+    @property
+    def reward_claimed(self) -> bool:
+        return self.rewarded
+
+    @reward_claimed.setter
+    def reward_claimed(self, value: bool) -> None:
+        self.rewarded = bool(value)
+
+    @property
+    def meta(self) -> Dict[str, object]:
+        return self.metadata
+
     def to_dict(self) -> Dict[str, object]:
         """Return a JSON-serialisable representation of the objective."""
 
         return {
             "objective_id": self.objective_id,
             "objective_type": self.objective_type,
+            "kind": self.objective_type,
             "period": self.period,
             "scope": self.period,
             "name": self.name,
@@ -104,10 +152,17 @@ class Objective:
             "rewards": dict(self.reward),
             "created_utc": self.created_utc,
             "expires_utc": self.expires_utc,
+            "created_day_key": self.created_day_key,
+            "created_week_key": self.created_week_key,
+            "expires_day_key": self.expires_day_key,
+            "expires_week_key": self.expires_week_key,
             "completed": bool(self.completed),
             "completed_utc": self.completed_utc,
+            "completed_day_key": self.completed_day_key,
             "rewarded": bool(self.rewarded),
+            "reward_claimed": bool(self.rewarded),
             "metadata": dict(self.metadata),
+            "meta": dict(self.metadata),
         }
 
     @classmethod
@@ -117,11 +172,12 @@ class Objective:
         reward = data.get("reward", data.get("rewards", {}))
         if not isinstance(reward, Mapping):
             reward = {}
-        metadata = data.get("metadata", {})
+        metadata = data.get("metadata", data.get("meta", {}))
         if not isinstance(metadata, Mapping):
             metadata = {}
         objective_type = str(
             data.get("objective_type")
+            or data.get("kind")
             or data.get("key")
             or data.get("objective")
             or key
@@ -131,7 +187,32 @@ class Objective:
         target = max(0, _safe_int(data.get("target"), 0))
         progress = _clamp(_safe_int(data.get("progress"), 0), 0, max(0, target))
         completed = bool(data.get("completed", progress >= target and target > 0))
-        objective_id = str(data.get("objective_id") or f"{period}:{objective_type}")
+        created_day_key = data.get("created_day_key")
+        created_week_key = data.get("created_week_key")
+        expires_day_key = data.get("expires_day_key")
+        expires_week_key = data.get("expires_week_key")
+        completed_day_key = data.get("completed_day_key")
+        if created_day_key in {None, ""} and period == "daily":
+            created_day_key = metadata.get("period_key")
+        if created_week_key in {None, ""} and period == "weekly":
+            created_week_key = metadata.get("period_key")
+        if expires_day_key in {None, ""} and period == "daily":
+            expires_day_key = metadata.get("period_key")
+        if expires_week_key in {None, ""} and period == "weekly":
+            expires_week_key = metadata.get("period_key")
+        period_key = (
+            str(created_day_key)
+            if period == "daily" and created_day_key not in {None, ""}
+            else str(created_week_key)
+            if period == "weekly" and created_week_key not in {None, ""}
+            else ""
+        )
+        fallback_objective_id = (
+            f"{period}:{period_key}:{objective_type}"
+            if period_key
+            else f"{period}:{objective_type}"
+        )
+        objective_id = str(data.get("objective_id") or fallback_objective_id)
         return cls(
             objective_id=objective_id,
             objective_type=objective_type,
@@ -147,17 +228,38 @@ class Objective:
             },
             created_utc=str(data.get("created_utc", "")),
             expires_utc=str(data.get("expires_utc", "")),
+            created_day_key=(
+                None if created_day_key in {None, ""} else str(created_day_key)
+            ),
+            created_week_key=(
+                None if created_week_key in {None, ""} else str(created_week_key)
+            ),
+            expires_day_key=(
+                None if expires_day_key in {None, ""} else str(expires_day_key)
+            ),
+            expires_week_key=(
+                None if expires_week_key in {None, ""} else str(expires_week_key)
+            ),
             completed=completed,
             completed_utc=(
                 None
                 if data.get("completed_utc") in {None, ""}
                 else str(data.get("completed_utc"))
             ),
-            rewarded=bool(data.get("rewarded", False)),
+            completed_day_key=(
+                None if completed_day_key in {None, ""} else str(completed_day_key)
+            ),
+            rewarded=bool(data.get("rewarded", data.get("reward_claimed", False))),
             metadata={str(meta_key): meta_value for meta_key, meta_value in metadata.items()},
         )
 
-    def record(self, amount: int = 1, *, completed_utc: str | None = None) -> int:
+    def record(
+        self,
+        amount: int = 1,
+        *,
+        completed_utc: str | None = None,
+        completed_day_key: str | None = None,
+    ) -> int:
         """Increment progress toward the target and return the applied delta."""
 
         if amount <= 0 or self.completed:
@@ -169,6 +271,8 @@ class Objective:
             self.completed = True
             if completed_utc:
                 self.completed_utc = completed_utc
+            if completed_day_key:
+                self.completed_day_key = completed_day_key
         return delta
 
 
@@ -321,11 +425,13 @@ class ObjectiveManager:
     def __init__(
         self,
         *,
+        profile_id: str = "default",
         time_provider: TimeProvider | None = None,
         reward_sink: Callable[[dict[str, int], Objective], None] | None = None,
         event_emitter: Callable[[dict[str, object]], None] | None = None,
         progression_level_provider: Callable[[], int] | None = None,
     ) -> None:
+        self.profile_id = str(profile_id or "default")
         self.time_provider = time_provider or TimeProvider()
         self.reward_sink = reward_sink
         self.event_emitter = event_emitter
@@ -383,7 +489,23 @@ class ObjectiveManager:
     def export_state(self) -> Dict[str, object]:
         """Return a JSON-safe export of the current objective state."""
 
+        daily_objectives = [
+            objective.to_dict()
+            for objective in self.objectives.values()
+            if objective.period == "daily"
+        ]
+        weekly_objectives = [
+            objective.to_dict()
+            for objective in self.objectives.values()
+            if objective.period == "weekly"
+        ]
+        recent_daily_kinds: list[str] = []
+        daily_history = self.assignment_history.get("daily", {})
+        for history_key in sorted(daily_history)[-3:]:
+            recent_daily_kinds.extend(list(daily_history.get(history_key, [])))
         return {
+            "schema_version": 1,
+            "profile_id": self.profile_id,
             "region_key": self.region_key,
             "region_name": self.region_name,
             "region_biome": self.region_biome,
@@ -391,14 +513,22 @@ class ObjectiveManager:
             "objectives": {
                 key: objective.to_dict() for key, objective in self.objectives.items()
             },
+            "daily_objectives": daily_objectives,
+            "weekly_objectives": weekly_objectives,
             "last_reset_day_key": self.last_reset_day_key,
             "last_reset_week_key": self.last_reset_week_key,
+            "last_daily_key": self.last_reset_day_key,
+            "last_weekly_key": self.last_reset_week_key,
             "daily_streak": int(self.daily_streak),
+            "daily_streak_count": int(self.daily_streak),
             "last_daily_completion_day_key": self.last_daily_completion_day_key,
+            "last_daily_completion_key": self.last_daily_completion_day_key,
             "last_assigned_types": {
                 period: list(values)
                 for period, values in self.last_assigned_types.items()
             },
+            "last_daily_kinds": recent_daily_kinds[-6:],
+            "last_weekly_kinds": list(self.last_assigned_types.get("weekly", [])),
             "assignment_history": {
                 period: {
                     history_key: list(values)
@@ -412,6 +542,7 @@ class ObjectiveManager:
         """Import objective state from persisted settings/profile data."""
 
         data = state if isinstance(state, Mapping) else {}
+        self.profile_id = str(data.get("profile_id") or self.profile_id or "default")
         self.region_key = data.get("region_key") or None
         self.region_name = str(data.get("region_name", self.region_name) or self.region_name)
         self.region_biome = str(
@@ -426,6 +557,18 @@ class ObjectiveManager:
         if not isinstance(raw_objectives, Mapping):
             raw_objectives = {}
         imported: Dict[str, Objective] = {}
+        for list_key in ("daily_objectives", "weekly_objectives"):
+            values = data.get(list_key, [])
+            if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+                continue
+            for value in values:
+                if not isinstance(value, Mapping):
+                    continue
+                objective = Objective.from_dict(
+                    str(value.get("objective_id") or value.get("objective_type") or value.get("kind") or ""),
+                    value,
+                )
+                imported[objective.objective_type] = objective
         for key, value in raw_objectives.items():
             if not isinstance(key, str) or not isinstance(value, Mapping):
                 continue
@@ -434,19 +577,30 @@ class ObjectiveManager:
         self.objectives = imported
         self.last_reset_day_key = (
             None
-            if data.get("last_reset_day_key") in {None, ""}
-            else str(data.get("last_reset_day_key"))
+            if data.get("last_reset_day_key", data.get("last_daily_key")) in {None, ""}
+            else str(data.get("last_reset_day_key", data.get("last_daily_key")))
         )
         self.last_reset_week_key = (
             None
-            if data.get("last_reset_week_key") in {None, ""}
-            else str(data.get("last_reset_week_key"))
+            if data.get("last_reset_week_key", data.get("last_weekly_key")) in {None, ""}
+            else str(data.get("last_reset_week_key", data.get("last_weekly_key")))
         )
-        self.daily_streak = max(0, _safe_int(data.get("daily_streak"), 0))
+        self.daily_streak = max(
+            0,
+            _safe_int(data.get("daily_streak", data.get("daily_streak_count")), 0),
+        )
         self.last_daily_completion_day_key = (
             None
-            if data.get("last_daily_completion_day_key") in {None, ""}
-            else str(data.get("last_daily_completion_day_key"))
+            if data.get(
+                "last_daily_completion_day_key",
+                data.get("last_daily_completion_key"),
+            ) in {None, ""}
+            else str(
+                data.get(
+                    "last_daily_completion_day_key",
+                    data.get("last_daily_completion_key"),
+                )
+            )
         )
         self.last_assigned_types = {"daily": [], "weekly": []}
         raw_assigned = data.get("last_assigned_types", {})
@@ -459,6 +613,16 @@ class ObjectiveManager:
                         for item in values
                         if str(item).strip()
                     ]
+        for period, alias_key in (("daily", "last_daily_kinds"), ("weekly", "last_weekly_kinds")):
+            if self.last_assigned_types[period]:
+                continue
+            values = data.get(alias_key, [])
+            if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+                self.last_assigned_types[period] = [
+                    self.normalize_objective_type(str(item))
+                    for item in values
+                    if str(item).strip()
+                ]
         self.assignment_history = {"daily": {}, "weekly": {}}
         raw_history = data.get("assignment_history", {})
         if isinstance(raw_history, Mapping):
@@ -506,7 +670,7 @@ class ObjectiveManager:
         day_key = self.time_provider.day_key(now)
         week_key = self.time_provider.week_key(now)
         self._sync_streak(day_key)
-        self._prune_history(week_key)
+        self._prune_history(day_key, week_key)
         if not self.region_context:
             self.region_context = self._normalize_region(None, fallback_name=self.region_name)
             self.region_key = str(self.region_context["region_key"])
@@ -542,6 +706,7 @@ class ObjectiveManager:
         if not tracked_types:
             return []
         now_iso = _utc_iso(self.time_provider.now_utc())
+        current_day_key = self.time_provider.day_key()
         source = ""
         if isinstance(meta, Mapping):
             source = str(meta.get("source", "")).strip()
@@ -549,7 +714,12 @@ class ObjectiveManager:
         for objective in self.objectives.values():
             if objective.objective_type not in tracked_types:
                 continue
-            delta = objective.record(amount, completed_utc=now_iso)
+            was_completed = objective.completed
+            delta = objective.record(
+                amount,
+                completed_utc=now_iso,
+                completed_day_key=current_day_key,
+            )
             if delta <= 0:
                 continue
             update = ObjectiveUpdate(
@@ -568,6 +738,7 @@ class ObjectiveManager:
                 {
                     "objective_id": objective.objective_id,
                     "objective": objective.objective_type,
+                    "kind": objective.objective_type,
                     "period": objective.period,
                     "event": str(event_type),
                     "progress": int(objective.progress),
@@ -577,7 +748,7 @@ class ObjectiveManager:
                     "source": source,
                 },
             )
-            if objective.completed:
+            if objective.completed and not was_completed:
                 if objective.period == "daily":
                     self._record_daily_completion()
                 self._emit_event(
@@ -585,8 +756,10 @@ class ObjectiveManager:
                     {
                         "objective_id": objective.objective_id,
                         "objective": objective.objective_type,
+                        "kind": objective.objective_type,
                         "period": objective.period,
                         "completed_utc": objective.completed_utc or now_iso,
+                        "completed_day_key": objective.completed_day_key,
                         "source": source,
                     },
                 )
@@ -617,6 +790,7 @@ class ObjectiveManager:
             payload: dict[str, object] = {
                 "objective_id": objective.objective_id,
                 "objective": objective.objective_type,
+                "kind": objective.objective_type,
                 "period": objective.period,
                 "reward": dict(reward),
                 "source": source,
@@ -642,6 +816,14 @@ class ObjectiveManager:
             if len(lines) >= limit:
                 break
         return lines
+
+    @property
+    def daily_objectives(self) -> List[Objective]:
+        return [objective for objective in self.objectives.values() if objective.period == "daily"]
+
+    @property
+    def weekly_objectives(self) -> List[Objective]:
+        return [objective for objective in self.objectives.values() if objective.period == "weekly"]
 
     def _emit_event(self, event_type: str, payload: dict[str, object]) -> None:
         emitter = self.event_emitter
@@ -755,10 +937,15 @@ class ObjectiveManager:
             }
             candidates = [item for item in candidates if item not in weekly_types] or candidates
         history = self.assignment_history.get(period, {})
-        history_values = list(history.get(period_key, []))
+        history_values: list[str] = []
+        if period == "daily":
+            for history_key in sorted(history)[-3:]:
+                history_values.extend(list(history.get(history_key, [])))
+        else:
+            history_values.extend(list(history.get(period_key, [])))
         repeat_block = set(self.last_assigned_types.get(period, []))
         region_token = str(self.region_key or self.region_name)
-        seed_prefix = f"{region_token}:{period}:{period_key}"
+        seed_prefix = f"{self.profile_id}:{region_token}:{period}:{period_key}"
         ranked = sorted(
             candidates,
             key=lambda objective_type: (
@@ -810,9 +997,21 @@ class ObjectiveManager:
         reward = self._build_reward(template, period, tier, target)
         created_utc = _utc_iso(now)
         expires_utc = _utc_iso(self._expiry_for_period(period, now))
-        objective_id = f"{period}:{objective_type}"
+        objective_id = f"{period}:{period_key}:{objective_type}"
         name = self._objective_name(objective_type, period)
         description = self._objective_description(objective_type, target)
+        created_day_key = period_key if period == "daily" else None
+        created_week_key = period_key if period == "weekly" else None
+        expires_day_key = (
+            self.time_provider.day_key(self._expiry_for_period(period, now))
+            if period == "daily"
+            else None
+        )
+        expires_week_key = (
+            self.time_provider.week_key(self._expiry_for_period(period, now))
+            if period == "weekly"
+            else None
+        )
         return Objective(
             objective_id=objective_id,
             objective_type=objective_type,
@@ -823,7 +1022,11 @@ class ObjectiveManager:
             reward=reward,
             created_utc=created_utc,
             expires_utc=expires_utc,
-            metadata={"period_key": period_key},
+            created_day_key=created_day_key,
+            created_week_key=created_week_key,
+            expires_day_key=expires_day_key,
+            expires_week_key=expires_week_key,
+            metadata={"period_key": period_key, "region_key": self.region_key},
         )
 
     def _weekly_floor(self, objective_type: str) -> int:
@@ -928,10 +1131,12 @@ class ObjectiveManager:
         if distance is not None and distance > 1:
             self.daily_streak = 0
 
-    def _prune_history(self, current_week_key: str) -> None:
+    def _prune_history(self, current_day_key: str, current_week_key: str) -> None:
         daily_history = self.assignment_history.setdefault("daily", {})
+        keep_daily = set(sorted(daily_history)[-7:])
+        keep_daily.add(current_day_key)
         for key in list(daily_history):
-            if key != current_week_key:
+            if key not in keep_daily:
                 daily_history.pop(key, None)
         weekly_history = self.assignment_history.setdefault("weekly", {})
         for key in list(weekly_history):

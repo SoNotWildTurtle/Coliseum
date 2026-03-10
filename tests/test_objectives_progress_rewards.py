@@ -31,7 +31,11 @@ def test_rewards_are_applied_once_and_events_are_emitted() -> None:
     )
 
     assert len(updates) == 1
-    assert updates[0].completed is True
+    update = updates[0]
+    assert update.kind == "defeat_enemies"
+    assert update.delta == objective.target
+    assert update.completed_now is True
+    assert update.progress == objective.target
     assert len(rewards) == 1
     assert rewards[0][0] == objective.objective_id
 

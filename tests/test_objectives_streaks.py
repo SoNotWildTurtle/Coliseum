@@ -45,4 +45,7 @@ def test_daily_streak_increments_and_resets_after_missed_day() -> None:
     third = _complete_daily(manager)
     assert third.completed is True
     assert manager.daily_streak == 1
+    exported = manager.export_state()
+    assert exported["daily_streak_count"] == 1
+    assert exported["last_daily_completion_key"] == "2026-03-13"
     assert len(rewards) >= 3

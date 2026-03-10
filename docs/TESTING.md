@@ -117,6 +117,13 @@ python -m hololive_coliseum.profile_store --profile default --reset
 python -m hololive_coliseum.profile_store --profile default --export SavedGames/profiles/default/export.json
 ```
 
+Inspect or simulate objective rotation without booting the game:
+
+```
+python -m hololive_coliseum.tools.objective_debug --profile default --print
+python -m hololive_coliseum.tools.objective_debug --profile default --advance-days 1 --event enemy_defeated --amount 5 --claim
+```
+
 ## MMO hub checklist
 
 Use this when touching MMO hub logic, flow, or UI:

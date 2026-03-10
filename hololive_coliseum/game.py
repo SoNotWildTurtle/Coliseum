@@ -484,6 +484,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.achievement_manager = AchievementManager()
         self.reputation_manager = ReputationManager()
         self.objective_manager = ObjectiveManager(
+            profile_id=self.profile_id,
             event_emitter=self._publish_event,
             progression_level_provider=self._objective_progression_level,
         )
@@ -5267,12 +5268,21 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
     def _publish_event(self, event: dict[str, object]) -> None:
         """Publish a structured event to the optional internal event bus."""
 
-        if not self.event_bus.has_subscribers:
-            return
         event_type = str(event.get("type", "unknown"))
         payload = event.get("payload", {})
         if not isinstance(payload, dict):
             payload = {"value": payload}
+        if event_type == "damage":
+            attacker_id = str(payload.get("attacker_id", ""))
+            amount = max(0, int(float(payload.get("amount", 0) or 0)))
+            if attacker_id.endswith("Player") and amount > 0:
+                self._record_objective_event(
+                    "damage_dealt",
+                    amount,
+                    source="combat",
+                )
+        if not self.event_bus.has_subscribers:
+            return
         self.event_bus.publish(
             {
                 "type": event_type,
@@ -5290,6 +5300,12 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         if amount == 0:
             return player.currency_manager.get_balance()
         balance = player.currency_manager.add(amount)
+        if amount > 0 and not source.startswith("objective:"):
+            self._record_objective_event(
+                "coins_earned",
+                amount,
+                source=source,
+            )
         self._publish_event(
             {
                 "type": "currency_delta",
@@ -5328,7 +5344,8 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         player = getattr(self, "player", None)
         if player is not None and hasattr(player, "experience_manager"):
             return max(1, int(getattr(player.experience_manager, "level", 1)))
-        progression = getattr(self.profile, "progression", {})
+        profile_data = self.profile.get("data", {}) if isinstance(self.profile, dict) else {}
+        progression = profile_data.get("progression", {}) if isinstance(profile_data, dict) else {}
         if isinstance(progression, dict):
             return max(1, int(progression.get("level", 1)))
         return 1
@@ -5396,11 +5413,6 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             if count:
                 self._record_objective_event(
                     "enemy_defeated",
-                    count,
-                    source="enemy_kill",
-                )
-                self._record_objective_event(
-                    "coin_collected",
                     count,
                     source="enemy_kill",
                 )

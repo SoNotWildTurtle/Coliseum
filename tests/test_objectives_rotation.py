@@ -39,9 +39,15 @@ def test_daily_and_weekly_rotation_is_deterministic() -> None:
     assert set(initial_daily).isdisjoint(initial_weekly)
     assert len(initial_daily) == len(set(initial_daily))
     assert len(initial_weekly) == len(set(initial_weekly))
+    assert manager.last_reset_day_key == "2026-03-10"
+    assert manager.last_reset_week_key == "2026-W11"
+    assert len(manager.daily_objectives) == len(initial_daily)
+    assert len(manager.weekly_objectives) == len(initial_weekly)
 
     assert all(target > 0 for target in initial_daily.values())
     assert all(target > 0 for target in initial_weekly.values())
+    assert all(":2026-03-10:" in obj.objective_id for obj in manager.daily_objectives)
+    assert all(":2026-W11:" in obj.objective_id for obj in manager.weekly_objectives)
 
     provider.advance(days=1)
     manager.refresh()
@@ -52,6 +58,7 @@ def test_daily_and_weekly_rotation_is_deterministic() -> None:
     }
     assert next_daily
     assert next_daily != set(initial_daily)
+    assert manager.last_reset_day_key == "2026-03-11"
 
     provider.advance(weeks=1)
     manager.refresh()
@@ -62,3 +69,4 @@ def test_daily_and_weekly_rotation_is_deterministic() -> None:
     }
     assert next_weekly
     assert next_weekly != set(initial_weekly)
+    assert manager.last_reset_week_key == "2026-W12"

@@ -3,7 +3,7 @@
 from .player import Enemy, BossEnemy, get_player_class
 from .gravity_zone import GravityZone
 from .platform import Platform, MovingPlatform, CrumblingPlatform
-from .save_manager import load_inventory, save_inventory
+from .save_manager import load_inventory
 from .ally_fighter import AllyFighter
 
 
@@ -19,7 +19,6 @@ class LevelManager:
         if getattr(g, "player", None) is not None:
             if hasattr(g, "_save_profile_checkpoint"):
                 g._save_profile_checkpoint()
-            save_inventory(g.player.inventory.to_dict())
             g.coins = g.player.currency_manager.get_balance()
         g.final_time = 0
         g.end_time = 0

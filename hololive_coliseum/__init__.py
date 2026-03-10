@@ -115,6 +115,8 @@ __all__ = [
     "AutoDevImplementationManager",
     "AutoDevExecutionManager",
     "ObjectiveManager",
+    "TimeProvider",
+    "FixedTimeProvider",
     "Objective",
     "NetworkManager",
     "NodeManager",
@@ -419,6 +421,7 @@ from .auto_dev_systems_manager import AutoDevSystemsManager
 from .auto_dev_creation_manager import AutoDevCreationManager
 from .auto_dev_synthesis_manager import AutoDevSynthesisManager
 from .objective_manager import ObjectiveManager, Objective
+from .time_provider import FixedTimeProvider, TimeProvider
 from .network import NetworkManager
 from .node_manager import NodeManager
 from .state_sync import StateSync

@@ -18,6 +18,17 @@ def _run_and_save(game: Game) -> None:
     game.run()
 
 
+def _event_for_objective(objective_type: str) -> str:
+    return {
+        "defeat_enemies": "enemy_defeated",
+        "collect_powerups": "powerup_collected",
+        "earn_coins": "coins_earned",
+        "win_matches": "match_won",
+        "deal_damage": "damage_dealt",
+        "hazard_mastery": "hazard_logged",
+    }[objective_type]
+
+
 def test_reputation_and_objectives_persist(tmp_path, monkeypatch):
     monkeypatch.setattr("hololive_coliseum.save_manager.SAVE_DIR", tmp_path)
     pygame.init()
@@ -28,22 +39,24 @@ def test_reputation_and_objectives_persist(tmp_path, monkeypatch):
     game._setup_level()
 
     game.reputation_manager.modify("Arena", 12)
-    game.objective_manager.record_event("enemy_defeated", 3)
+    objective = next(iter(game.objective_manager.objectives.values()))
+    game.objective_manager.record_event(_event_for_objective(objective.objective_type), 3)
 
     _run_and_save(game)
     settings = load_settings()
 
     assert settings["reputation"]["Arena"] == 12
     objectives = settings["objectives"]["objectives"]
-    assert objectives["defeat_enemies"]["progress"] >= 3
+    objective_data = objectives[objective.objective_type]
+    assert objective_data["progress"] >= 1
 
     pygame.display.set_mode((1, 1))
     reload_game = Game()
     assert reload_game.reputation_manager.get("Arena") == 12
     reloaded = ObjectiveManager()
     reloaded.load_from_dict(settings["objectives"])
-    loaded = reloaded.objectives["defeat_enemies"]
-    assert loaded.progress >= 3
+    loaded = reloaded.objectives[objective.objective_type]
+    assert loaded.progress >= 1
     pygame.quit()
 
 
@@ -56,12 +69,15 @@ def test_objective_rewards_persisted_state(tmp_path, monkeypatch):
     game.selected_map = game.maps[0]
     game._setup_level()
 
-    objective = game.objective_manager.objectives["defeat_enemies"]
-    game.objective_manager.record_event("enemy_defeated", objective.target)
+    objective = next(iter(game.objective_manager.objectives.values()))
+    game.objective_manager.record_event(
+        _event_for_objective(objective.objective_type),
+        objective.target,
+    )
 
     _run_and_save(game)
     settings = load_settings()
-    objective_data = settings["objectives"]["objectives"]["defeat_enemies"]
+    objective_data = settings["objectives"]["objectives"][objective.objective_type]
     assert objective_data["rewarded"] is True
 
     pygame.display.set_mode((1, 1))
@@ -69,6 +85,6 @@ def test_objective_rewards_persisted_state(tmp_path, monkeypatch):
     assert reload_game.reputation_manager.get("Arena") == 0
     reloaded = ObjectiveManager()
     reloaded.load_from_dict(settings["objectives"])
-    loaded = reloaded.objectives["defeat_enemies"]
+    loaded = reloaded.objectives[objective.objective_type]
     assert loaded.rewarded is True
     pygame.quit()

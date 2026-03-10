@@ -117,7 +117,14 @@ def default_profile(profile_id: str | None = None) -> Profile:
             "region_key": None,
             "region_name": "Arena",
             "region_biome": "arena",
+            "region_context": {},
             "objectives": {},
+            "last_reset_day_key": None,
+            "last_reset_week_key": None,
+            "daily_streak": 0,
+            "last_daily_completion_day_key": None,
+            "last_assigned_types": {"daily": [], "weekly": []},
+            "assignment_history": {"daily": {}, "weekly": {}},
         },
         meta={
             "profile_display_name": "Player",
@@ -348,6 +355,54 @@ def _validate_payload(
     objectives["region_biome"] = str(
         objectives.get("region_biome", "arena") or "arena"
     )
+    region_context = objectives.get("region_context")
+    if not isinstance(region_context, dict):
+        region_context = {}
+    objectives["region_context"] = {
+        str(key): value for key, value in region_context.items() if isinstance(key, str)
+    }
+    objectives["last_reset_day_key"] = (
+        None
+        if objectives.get("last_reset_day_key") in {None, ""}
+        else str(objectives.get("last_reset_day_key"))
+    )
+    objectives["last_reset_week_key"] = (
+        None
+        if objectives.get("last_reset_week_key") in {None, ""}
+        else str(objectives.get("last_reset_week_key"))
+    )
+    objectives["daily_streak"] = _clamp_int(
+        objectives.get("daily_streak"),
+        0,
+        1_000_000,
+        0,
+    )
+    objectives["last_daily_completion_day_key"] = (
+        None
+        if objectives.get("last_daily_completion_day_key") in {None, ""}
+        else str(objectives.get("last_daily_completion_day_key"))
+    )
+    last_assigned = objectives.get("last_assigned_types")
+    if not isinstance(last_assigned, dict):
+        last_assigned = {}
+    objectives["last_assigned_types"] = {
+        period: [str(item) for item in values if str(item).strip()]
+        for period, values in last_assigned.items()
+        if isinstance(period, str)
+        and isinstance(values, list)
+    }
+    assignment_history = objectives.get("assignment_history")
+    if not isinstance(assignment_history, dict):
+        assignment_history = {}
+    objectives["assignment_history"] = {
+        str(period): {
+            str(history_key): [str(item) for item in values if str(item).strip()]
+            for history_key, values in history.items()
+            if isinstance(history_key, str) and isinstance(values, list)
+        }
+        for period, history in assignment_history.items()
+        if isinstance(period, str) and isinstance(history, dict)
+    }
     raw_objectives = objectives.get("objectives")
     if not isinstance(raw_objectives, dict):
         raw_objectives = {}
@@ -357,19 +412,39 @@ def _validate_payload(
             warnings.append("objectives entry was invalid and was ignored")
             continue
         entry = dict(value)
+        entry["objective_id"] = str(entry.get("objective_id") or key)
+        entry["objective_type"] = str(entry.get("objective_type") or key)
+        entry["period"] = str(entry.get("period") or entry.get("scope", "daily") or "daily")
+        entry["scope"] = str(entry.get("scope") or entry["period"])
+        entry["name"] = str(entry.get("name") or key.replace("_", " ").title())
         entry["description"] = str(entry.get("description", ""))
         entry["target"] = _clamp_int(entry.get("target"), 0, 1_000_000, 0)
         entry["progress"] = _clamp_int(entry.get("progress"), 0, 1_000_000, 0)
-        entry["scope"] = str(entry.get("scope", "daily") or "daily")
-        rewards = entry.get("rewards")
+        rewards = entry.get("reward", entry.get("rewards"))
         if not isinstance(rewards, dict):
             rewards = {}
-        entry["rewards"] = {
+        normalized_rewards = {
             str(r_key): max(0, _as_int(r_value, 0))
             for r_key, r_value in rewards.items()
             if isinstance(r_key, str)
         }
+        entry["reward"] = dict(normalized_rewards)
+        entry["rewards"] = dict(normalized_rewards)
+        entry["created_utc"] = str(entry.get("created_utc", ""))
+        entry["expires_utc"] = str(entry.get("expires_utc", ""))
+        entry["completed"] = bool(entry.get("completed", False))
+        entry["completed_utc"] = (
+            None if entry.get("completed_utc") in {None, ""} else str(entry.get("completed_utc"))
+        )
         entry["rewarded"] = bool(entry.get("rewarded", False))
+        metadata = entry.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        entry["metadata"] = {
+            str(meta_key): meta_value
+            for meta_key, meta_value in metadata.items()
+            if isinstance(meta_key, str)
+        }
         normalized_objectives[key] = entry
     objectives["objectives"] = normalized_objectives
     data["objectives"] = objectives

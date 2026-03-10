@@ -20,3 +20,12 @@ asset_pack/**/*.png
 asset_pack/**/*.ogg
 asset_pack/**/*.wav
 test_nodes*/
+
+# Local/dev artifacts
+.venv/
+*.lnk
+Github Pull request.txt
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.py[cod]

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Iterable, List, Tuple
 
+from .distributed_merge import merge_snapshot
 from .shared_state_manager import SharedStateManager
 from .state_verification_manager import StateVerificationManager
 
@@ -86,37 +88,79 @@ class MMOWorldStateManager:
         return tuple(entry.get(key) for key in keys)
 
     @staticmethod
+    def _merge_key(entry: Dict[str, Any], key_fields: Tuple[str, ...]) -> str:
+        return json.dumps(
+            [entry.get(key) for key in key_fields],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+
+    @staticmethod
+    def _merge_records(
+        local: List[Dict[str, Any]],
+        incoming: List[Dict[str, Any]],
+        key_fields: Tuple[str, ...],
+        *,
+        shard: str,
+        ts_field: str = "updated_at",
+        origin_field: str = "origin",
+    ) -> List[Dict[str, Any]]:
+        state: Dict[str, Any] = {}
+        meta: Dict[str, Dict[str, Any]] = {}
+
+        def _to_payload(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+            payload_state: Dict[str, Any] = {}
+            payload_meta: Dict[str, Dict[str, Any]] = {}
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                key = MMOWorldStateManager._merge_key(entry, key_fields)
+                payload_state[key] = dict(entry)
+                payload_meta[key] = {
+                    "logical_ts": int(entry.get(ts_field, 0) or 0),
+                    "sender_id": str(entry.get(origin_field, "")),
+                    "tombstone": False,
+                }
+            return {"state": payload_state, "meta": payload_meta}
+
+        merge_snapshot(
+            state,
+            meta,
+            _to_payload(local),
+            "local",
+            0,
+            shard_id=shard,
+            target_shard_id=shard,
+        )
+        merge_snapshot(
+            state,
+            meta,
+            _to_payload(incoming),
+            "incoming",
+            0,
+            shard_id=shard,
+            target_shard_id=shard,
+        )
+        return [dict(state[key]) for key in sorted(state)]
+
+    @staticmethod
     def merge_list(
         local: List[Dict[str, Any]],
         incoming: List[Dict[str, Any]],
         key_fields: Tuple[str, ...],
         ts_field: str = "updated_at",
         origin_field: str = "origin",
+        shard: str = "public",
     ) -> List[Dict[str, Any]]:
         """Merge two lists by key and timestamp."""
-        merged: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
-        for entry in local:
-            if not isinstance(entry, dict):
-                continue
-            merged[MMOWorldStateManager._entry_key(entry, key_fields)] = dict(entry)
-        for entry in incoming:
-            if not isinstance(entry, dict):
-                continue
-            key = MMOWorldStateManager._entry_key(entry, key_fields)
-            current = merged.get(key)
-            if current is None:
-                merged[key] = dict(entry)
-                continue
-            current_ts = int(current.get(ts_field, 0) or 0)
-            incoming_ts = int(entry.get(ts_field, 0) or 0)
-            if incoming_ts > current_ts:
-                merged[key] = dict(entry)
-            elif incoming_ts == current_ts:
-                current_origin = str(current.get(origin_field, ""))
-                incoming_origin = str(entry.get(origin_field, ""))
-                if incoming_origin > current_origin:
-                    merged[key] = dict(entry)
-        return list(merged.values())
+        return MMOWorldStateManager._merge_records(
+            local,
+            incoming,
+            key_fields,
+            shard=shard,
+            ts_field=ts_field,
+            origin_field=origin_field,
+        )
 
     def merge_states(
         self,
@@ -131,10 +175,13 @@ class MMOWorldStateManager:
             str(incoming.get("shard")) if incoming.get("shard") is not None else ""
         )
         if local_shard and incoming_shard and local_shard != incoming_shard:
-            return dict(incoming)
+            raise ValueError(
+                f"shard mismatch: incoming {incoming_shard!r} does not match local {local_shard!r}"
+            )
         local_updated = int(local.get("updated_at", 0) or 0)
         incoming_updated = int(incoming.get("updated_at", 0) or 0)
         merged = dict(local)
+        target_shard = incoming_shard or local_shard or "public"
         merged.update(
             {
                 "updated_at": max(local_updated, incoming_updated),
@@ -145,49 +192,55 @@ class MMOWorldStateManager:
         incoming_regions = incoming.get("regions") or []
         if isinstance(local_regions, list) and isinstance(incoming_regions, list):
             merged["regions"] = self.merge_list(
-                local_regions, incoming_regions, ("name",)
+                local_regions, incoming_regions, ("name",), shard=target_shard
             )
         local_events = local.get("world_events") or []
         incoming_events = incoming.get("world_events") or []
         if isinstance(local_events, list) and isinstance(incoming_events, list):
             merged["world_events"] = self.merge_list(
-                local_events, incoming_events, ("id",)
+                local_events, incoming_events, ("id",), shard=target_shard
             )
         local_outposts = local.get("outposts") or []
         incoming_outposts = incoming.get("outposts") or []
         if isinstance(local_outposts, list) and isinstance(incoming_outposts, list):
             merged["outposts"] = self.merge_list(
-                local_outposts, incoming_outposts, ("region",)
+                local_outposts, incoming_outposts, ("region",), shard=target_shard
             )
         local_ops = local.get("operations") or []
         incoming_ops = incoming.get("operations") or []
         if isinstance(local_ops, list) and isinstance(incoming_ops, list):
             merged["operations"] = self.merge_list(
-                local_ops, incoming_ops, ("name",)
+                local_ops, incoming_ops, ("name",), shard=target_shard
             )
         local_routes = local.get("trade_routes") or []
         incoming_routes = incoming.get("trade_routes") or []
         if isinstance(local_routes, list) and isinstance(incoming_routes, list):
             merged["trade_routes"] = self.merge_list(
-                local_routes, incoming_routes, ("origin", "destination")
+                local_routes,
+                incoming_routes,
+                ("origin", "destination"),
+                shard=target_shard,
             )
         local_directives = local.get("directives") or []
         incoming_directives = incoming.get("directives") or []
         if isinstance(local_directives, list) and isinstance(incoming_directives, list):
             merged["directives"] = self.merge_list(
-                local_directives, incoming_directives, ("id",)
+                local_directives, incoming_directives, ("id",), shard=target_shard
             )
         local_bounties = local.get("bounties") or []
         incoming_bounties = incoming.get("bounties") or []
         if isinstance(local_bounties, list) and isinstance(incoming_bounties, list):
             merged["bounties"] = self.merge_list(
-                local_bounties, incoming_bounties, ("id",)
+                local_bounties, incoming_bounties, ("id",), shard=target_shard
             )
         local_tombstones = local.get("tombstones") or []
         incoming_tombstones = incoming.get("tombstones") or []
         if isinstance(local_tombstones, list) and isinstance(incoming_tombstones, list):
             merged["tombstones"] = self.merge_list(
-                local_tombstones, incoming_tombstones, ("kind", "id")
+                local_tombstones,
+                incoming_tombstones,
+                ("kind", "id"),
+                shard=target_shard,
             )
         tombstones = merged.get("tombstones", [])
         if isinstance(tombstones, list):

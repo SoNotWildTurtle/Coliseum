@@ -483,7 +483,11 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         self.chat_input = ""
         self.achievement_manager = AchievementManager()
         self.reputation_manager = ReputationManager()
-        self.objective_manager = ObjectiveManager()
+        self.objective_manager = ObjectiveManager(
+            event_emitter=self._publish_event,
+            progression_level_provider=self._objective_progression_level,
+        )
+        self.objective_manager.set_reward_sink(self._apply_objective_reward)
         self.load_profile(self.profile_id)
         if not self.objective_manager.objectives:
             self.objective_manager.load_from_dict(self.settings.get("objectives", {}))
@@ -5320,6 +5324,15 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
         )
         return leveled
 
+    def _objective_progression_level(self) -> int:
+        player = getattr(self, "player", None)
+        if player is not None and hasattr(player, "experience_manager"):
+            return max(1, int(getattr(player.experience_manager, "level", 1)))
+        progression = getattr(self.profile, "progression", {})
+        if isinstance(progression, dict):
+            return max(1, int(progression.get("level", 1)))
+        return 1
+
     def _modify_reputation(self, faction: str, amount: int, *, source: str) -> int:
         value = self.reputation_manager.modify(faction, amount)
         self._publish_event(
@@ -5337,33 +5350,12 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
 
     def _record_objective_event(
         self, event_name: str, amount: int = 1, *, source: str
-    ) -> list[dict[str, int]]:
-        before = {
-            key: (obj.progress, obj.rewarded)
-            for key, obj in self.objective_manager.objectives.items()
-        }
-        rewards = self.objective_manager.record_event(event_name, amount)
-        tracked = self.objective_manager.EVENT_MAP.get(event_name, ())
-        for key in tracked:
-            obj = self.objective_manager.objectives.get(key)
-            if obj is None:
-                continue
-            prev_progress, prev_rewarded = before.get(key, (0, False))
-            if obj.progress != prev_progress or obj.rewarded != prev_rewarded:
-                self._publish_event(
-                    {
-                        "type": "objective_progress",
-                        "payload": {
-                            "event": event_name,
-                            "objective": key,
-                            "progress": int(obj.progress),
-                            "target": int(obj.target),
-                            "rewarded": bool(obj.rewarded),
-                            "source": source,
-                        },
-                    }
-                )
-        return rewards
+    ) -> list[object]:
+        return self.objective_manager.record_event(
+            event_name,
+            amount,
+            meta={"source": source},
+        )
 
     def _handle_collisions(self) -> None:
         """Delegate collision handling to :class:`CombatManager`."""       
@@ -5401,21 +5393,16 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 self.score_manager.add(5 * count)
             self._award_currency(count, source="enemy_kill")
             self.kills += count
-            rewards = []
             if count:
-                rewards.extend(
-                    self._record_objective_event(
-                        "enemy_defeated",
-                        count,
-                        source="enemy_kill",
-                    )
+                self._record_objective_event(
+                    "enemy_defeated",
+                    count,
+                    source="enemy_kill",
                 )
-                rewards.extend(
-                    self._record_objective_event(
-                        "coin_collected",
-                        count,
-                        source="enemy_kill",
-                    )
+                self._record_objective_event(
+                    "coin_collected",
+                    count,
+                    source="enemy_kill",
                 )
             for enemy in killed:
                 loot = self.loot_manager.roll_loot(enemy.__class__.__name__)
@@ -5428,8 +5415,6 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 )
             xp_gain = max(1, int(sum(self._xp_for_enemy(enemy) for enemy in killed)))
             self._award_xp(xp_gain, source="enemy_kill")
-            if rewards:
-                self._apply_objective_rewards(rewards)
             if (
                 self.kills >= 1
                 and not self.achievement_manager.is_unlocked("First Blood")
@@ -5517,28 +5502,30 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                     (self.player.rect.centerx, self.player.rect.top - 24),
                 )
             self.event_manager.trigger(f"pickup_{p.effect}")
-            rewards = self._record_objective_event(
+            self._record_objective_event(
                 "powerup_collected",
                 source="powerup",
             )
-            if rewards:
-                self._apply_objective_rewards(rewards)
             p.kill()
 
-    def _apply_objective_rewards(self, rewards: list[dict[str, int]]) -> None:
-        """Grant coins or experience from newly completed objectives."""
+    def _apply_objective_reward(self, reward: dict[str, int], objective) -> None:
+        """Grant a single objective reward through standard progression hooks."""
 
-        player = getattr(self, "player", None)
-        if not rewards or player is None:
-            return
-        for reward in rewards:
-            coins = int(reward.get("coins", 0))
-            xp = int(reward.get("xp", 0))
-            if coins:
-                self._award_currency(coins, source="objective_reward")
-            if xp:
-                self._award_xp(xp, source="objective_reward")
+        objective_type = str(getattr(objective, "objective_type", "unknown"))
+        source = f"objective:{objective_type}"
+        coins = int(reward.get("coins", 0))
+        xp = int(reward.get("xp", 0))
+        if coins:
+            self._award_currency(coins, source=source)
+        if xp:
+            self._award_xp(xp, source=source)
         self._autosave_profile_if_enabled()
+
+    def _apply_objective_rewards(self, rewards: list[dict[str, int]]) -> None:
+        """Backward-compatible bulk reward wrapper for objective payouts."""
+
+        for reward in rewards:
+            self._apply_objective_reward(reward, objective=None)
 
     def _bootstrap_profile_from_legacy_settings(self) -> None:
         """Seed an empty profile from legacy settings/inventory files."""
@@ -7275,12 +7262,10 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                             "account": self.account_id,
                         }
                     )
-                    victory_rewards = self._record_objective_event(
+                    self._record_objective_event(
                         "match_victory",
                         source="match_end",
                     )
-                    if victory_rewards:
-                        self._apply_objective_rewards(victory_rewards)
                     self._bump_ai_progression()
                     self.arena_wins += 1
                     final_chapter = self.chapters[-1] if self.chapters else None

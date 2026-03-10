@@ -80,7 +80,10 @@ awarding coins or experience when objectives finish. Progress appears directly
 on the HUD so arenas and the evolving MMO share the same set of strategic
 targets. Auto-development telemetry now adds hazard mastery objectives,
 challenging players to endure whichever trap is currently trending so Coliseum
-runs prepare explorers for the MMO's next regions.
+runs prepare explorers for the MMO's next regions. Rotation is deterministic
+through an injected UTC time provider, so daily and weekly resets, streak
+bonuses, persistence, telemetry hooks, and debug simulations all behave
+consistently in tests and tooling.
 An `AutoDevScenarioManager` converts those hazard projections and objectives
 into scenario briefs. Each region stores the recommended counter plan and
 objective reminders so MMO designers see ready-made drills for the latest

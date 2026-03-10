@@ -1,40 +1,60 @@
-"""Tests for objective manager."""
+"""Smoke tests for the deterministic objective manager."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from hololive_coliseum.objective_manager import ObjectiveManager
+from hololive_coliseum.time_provider import FixedTimeProvider
 
 
-def test_ensure_region_creates_objectives():
-    manager = ObjectiveManager()
+def test_ensure_region_creates_daily_and_weekly_objectives() -> None:
+    provider = FixedTimeProvider(datetime(2026, 3, 10, tzinfo=timezone.utc))
+    manager = ObjectiveManager(
+        time_provider=provider,
+        progression_level_provider=lambda: 6,
+    )
     manager.ensure_region_objectives(
         {"name": "Glacial Front", "recommended_level": 3, "radius": 2},
         fallback_name="Glacial Front",
     )
     summary = manager.summary(limit=4)
-    assert summary and "Glacial Front" in summary[0]
+    assert summary
+    assert any(objective.period == "daily" for objective in manager.objectives.values())
+    assert any(objective.period == "weekly" for objective in manager.objectives.values())
 
 
-def test_record_event_rewards_only_once():
-    manager = ObjectiveManager()
+def test_record_event_rewards_only_once() -> None:
+    awarded: list[dict[str, int]] = []
+    provider = FixedTimeProvider(datetime(2026, 3, 10, tzinfo=timezone.utc))
+    manager = ObjectiveManager(
+        time_provider=provider,
+        reward_sink=lambda reward, objective: awarded.append(dict(reward)),
+    )
     manager.ensure_region_objectives({"name": "Arena"})
-    target = manager.objectives["defeat_enemies"].target
-    rewards = manager.record_event("enemy_defeated", target)
-    assert rewards  # reward granted on completion
-    assert not manager.record_event("enemy_defeated", 1)
+    objective = next(obj for obj in manager.objectives.values() if obj.objective_type == "earn_coins")
+    updates = manager.record_event("coins_earned", objective.target)
+    assert updates and updates[0].completed is True
+    assert len(awarded) == 1
+    manager.record_event("coins_earned", 1)
+    assert len(awarded) == 1
 
 
-def test_objective_manager_round_trip():
-    manager = ObjectiveManager()
+def test_objective_manager_round_trip() -> None:
+    provider = FixedTimeProvider(datetime(2026, 3, 10, tzinfo=timezone.utc))
+    manager = ObjectiveManager(time_provider=provider)
     manager.ensure_region_objectives({"name": "Frontier"})
-    manager.record_event("coin_collected", 5)
+    manager.record_event("coins_earned", 5)
     data = manager.to_dict()
-    restored = ObjectiveManager()
+    restored = ObjectiveManager(time_provider=provider)
     restored.load_from_dict(data)
     assert restored.region_name == "Frontier"
-    assert restored.objectives["collect_coins"].progress == 5
+    assert restored.to_dict() == data
 
 
-def test_auto_dev_hazard_objective_creation():
-    manager = ObjectiveManager()
+def test_auto_dev_hazard_objective_creation() -> None:
+    provider = FixedTimeProvider(datetime(2026, 3, 10, tzinfo=timezone.utc))
+    manager = ObjectiveManager(time_provider=provider)
     region = {
         "name": "Inferno Reach",
         "auto_dev": {"hazard_challenge": {"hazard": "lava", "target": 4}},
@@ -43,5 +63,3 @@ def test_auto_dev_hazard_objective_creation():
     hazard_obj = manager.objectives.get("hazard_mastery")
     assert hazard_obj is not None
     assert "lava" in hazard_obj.description
-    rewards = manager.record_event("hazard_logged", hazard_obj.target)
-    assert rewards

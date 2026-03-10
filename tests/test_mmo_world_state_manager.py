@@ -85,7 +85,7 @@ def test_world_state_merge_prefers_newer_entries():
     assert merged["influence"]["r1"] == 20
 
 
-def test_world_state_merge_resets_on_shard_change():
+def test_world_state_merge_rejects_shard_change():
     mgr = MMOWorldStateManager()
     local = MMOWorldStateManager.build_snapshot(
         regions=[{"name": "r1", "updated_at": 1, "origin": "a"}],
@@ -113,10 +113,8 @@ def test_world_state_merge_resets_on_shard_change():
         updated_at=20,
         shard="shard-2",
     )
-    merged = mgr.merge_states(local, incoming)
-    assert merged["shard"] == "shard-2"
-    assert merged["regions"] == incoming["regions"]
-    assert merged["influence"] == incoming["influence"]
+    with pytest.raises(ValueError, match="shard mismatch"):
+        mgr.merge_states(local, incoming)
 
 
 def test_world_state_tombstones_remove_entries():

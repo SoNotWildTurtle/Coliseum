@@ -124,6 +124,11 @@ python -m hololive_coliseum.tools.objective_debug --profile default --print
 python -m hololive_coliseum.tools.objective_debug --profile default --advance-days 1 --event enemy_defeated --amount 5 --claim
 ```
 
+Distributed merge rules are deterministic: higher `logical_ts` wins, ties break
+by lexicographically higher `sender_id`, and newer tombstones suppress older live
+values. Merge functions also reject cross-shard updates instead of silently
+mixing shard state.
+
 ## MMO hub checklist
 
 Use this when touching MMO hub logic, flow, or UI:

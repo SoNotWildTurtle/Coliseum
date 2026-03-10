@@ -1,10 +1,19 @@
-"""Tests for profile adapter export/hydration helpers."""
+"""Tests for profile adapter export/import helpers."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from hololive_coliseum.profile_adapters import export_profile_data, hydrate_profile_data
+from hololive_coliseum.profile_adapters import (
+    export_achievements,
+    export_economy,
+    export_inventory,
+    export_objectives,
+    export_profile_data,
+    export_progression,
+    export_reputation,
+    hydrate_profile_data,
+)
 from hololive_coliseum.profile_store import default_profile
 
 
@@ -79,13 +88,35 @@ def _game_and_player():
         achievement_manager=_Achievements(),
         reputation_manager=_Reputation(),
         objective_manager=_Objectives(),
+        player=None,
     )
     player = SimpleNamespace(
         inventory=_Inventory(),
         currency_manager=_Currency(),
         experience_manager=_XP(),
     )
+    game.player = player
     return game, player
+
+
+def test_export_helpers_read_from_managers() -> None:
+    game, player = _game_and_player()
+    player.inventory.items = {"potion": 3}
+    player.inventory.capacity = 20
+    player.currency_manager.balance = 77
+    player.experience_manager.level = 5
+    player.experience_manager.xp = 22
+    game.achievement_manager.unlocked = {"First Blood"}
+    game.reputation_manager.rep = {"Arena": 9}
+    game.objective_manager.data = {"objectives": {"daily": {"progress": 1}}}
+    game.mmo_unlocked = True
+
+    assert export_inventory(game)["items"] == {"potion": 3}
+    assert export_economy(game)["balances"]["coins"] == 77
+    assert export_progression(game)["level"] == 5
+    assert export_reputation(game)["factions"]["Arena"] == 9
+    assert export_achievements(game)["unlocked_ids"] == ["First Blood"]
+    assert export_objectives(game) == {"objectives": {"daily": {"progress": 1}}}
 
 
 def test_export_profile_data_reads_from_managers() -> None:
@@ -100,7 +131,7 @@ def test_export_profile_data_reads_from_managers() -> None:
     game.objective_manager.data = {"objectives": {"daily": {"progress": 1}}}
     game.mmo_unlocked = True
 
-    data = export_profile_data(game, player=player)
+    data = export_profile_data(game)
 
     assert data["inventory"]["items"] == {"potion": 3}
     assert data["economy"]["balances"]["coins"] == 77
@@ -128,8 +159,9 @@ def test_hydrate_profile_data_applies_manager_state() -> None:
         "objectives": {"objectives": {"daily": {"progress": 1}}},
     }
 
-    hydrate_profile_data(game, payload, player=player)
+    warnings = hydrate_profile_data(game, payload)
 
+    assert warnings == []
     assert player.inventory.items == {"gem": 2}
     assert player.inventory.capacity == 10
     assert player.currency_manager.balance == 42

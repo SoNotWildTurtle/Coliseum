@@ -54,7 +54,6 @@ from .event_modifier_manager import EventModifierManager
 from .save_manager import (
     load_inventory,
     load_settings,
-    save_inventory,
     save_settings,
     wipe_saves,
 )
@@ -137,7 +136,7 @@ from .ui_metrics import (
     normalize_user_font_scale,
 )
 from .ui_debug import UIDebugger
-from .profile_store import Profile, ProfileStore
+from .profile_store import ProfileStore
 from .profile_adapters import export_profile_data, hydrate_profile_data
 from .event_bus import EventBus
 from .telemetry_logger import TelemetryLogger
@@ -195,8 +194,7 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             or self.settings.get("account_id")
             or "default"
         )
-        self.profile: Profile = self.profile_store.load(self.profile_id)
-        self.profile_warnings: list[str] = list(self.profile.validation_warnings)
+        self.profile, self.profile_warnings = self.profile_store.load(self.profile_id)
         self.profile_autosave = os.environ.get("HOLO_AUTOSAVE", "0") == "1"
         self._bootstrap_profile_from_legacy_settings()
         self._apply_profile_to_global_progression()
@@ -562,7 +560,9 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             headless=(os.environ.get("PYGAME_HEADLESS") == "1"),
         )
         self.ui_debug_summary_path: str | None = None
-        profile_unlocks = self.profile.progression.get("unlocks", {})
+        profile_data = self.profile.get("data", {}) if isinstance(self.profile, dict) else {}
+        progression_data = profile_data.get("progression", {}) if isinstance(profile_data, dict) else {}
+        profile_unlocks = progression_data.get("unlocks", {})
         if not isinstance(profile_unlocks, dict):
             profile_unlocks = {}
         self.mmo_unlocked = bool(
@@ -5530,13 +5530,22 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
     def _bootstrap_profile_from_legacy_settings(self) -> None:
         """Seed an empty profile from legacy settings/inventory files."""
 
-        items = self.profile.inventory.get("items", {})
-        balances = self.profile.economy.get("balances", {})
-        unlocks = self.profile.progression.get("unlocks", {})
+        data = self.profile.get("data", {}) if isinstance(self.profile, dict) else {}
+        if not isinstance(data, dict):
+            data = {}
+            self.profile["data"] = data
+        inventory = data.setdefault("inventory", {})
+        economy = data.setdefault("economy", {})
+        progression = data.setdefault("progression", {})
+        achievements = data.setdefault("achievements", {})
+        reputation = data.setdefault("reputation", {})
+        items = inventory.get("items", {})
+        balances = economy.get("balances", {})
+        unlocks = progression.get("unlocks", {})
         has_progress = bool(
             items
-            or self.profile.achievements.get("unlocked_ids")
-            or self.profile.reputation.get("factions")
+            or achievements.get("unlocked_ids")
+            or reputation.get("factions")
             or (isinstance(balances, dict) and int(balances.get("coins", 0)) > 0)
             or (isinstance(unlocks, dict) and unlocks.get("mmo_unlocked"))
         )
@@ -5544,53 +5553,56 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             return
         legacy_inventory = load_inventory()
         if isinstance(legacy_inventory, dict) and legacy_inventory:
-            self.profile.inventory["items"] = {
+            inventory["items"] = {
                 str(k): max(0, int(v))
                 for k, v in legacy_inventory.items()
                 if isinstance(k, str)
             }
         legacy_coins = self.settings.get("coins")
         if legacy_coins is not None:
-            self.profile.economy.setdefault("balances", {})
-            self.profile.economy["balances"]["coins"] = max(0, int(legacy_coins))
+            economy.setdefault("balances", {})
+            economy["balances"]["coins"] = max(0, int(legacy_coins))
         legacy_achievements = self.settings.get("achievements", [])
         if isinstance(legacy_achievements, list) and legacy_achievements:
-            self.profile.achievements["unlocked_ids"] = sorted(
+            achievements["unlocked_ids"] = sorted(
                 {str(item) for item in legacy_achievements if str(item)}
             )
         legacy_reputation = self.settings.get("reputation", {})
         if isinstance(legacy_reputation, dict) and legacy_reputation:
-            self.profile.reputation["factions"] = {
+            reputation["factions"] = {
                 str(k): int(v)
                 for k, v in legacy_reputation.items()
                 if isinstance(k, str)
             }
         legacy_objectives = self.settings.get("objectives", {})
         if isinstance(legacy_objectives, dict) and legacy_objectives:
-            self.profile.objectives = dict(legacy_objectives)
+            data["objectives"] = dict(legacy_objectives)
         if self.settings.get("mmo_unlocked"):
-            self.profile.progression.setdefault("unlocks", {})
-            self.profile.progression["unlocks"]["mmo_unlocked"] = True
-        self.profile_store.save(self.profile)
+            progression.setdefault("unlocks", {})
+            progression["unlocks"]["mmo_unlocked"] = True
+        self.profile["data"] = data
+        self.profile_store.save(self.profile_id, self.profile)
 
     def _apply_profile_to_global_progression(self) -> None:
         """Apply profile-level progression to runtime defaults."""
 
-        hydrate_profile_data(self, self.profile.to_dict().get("data", {}))
+        profile_data = self.profile.get("data", {}) if isinstance(self.profile, dict) else {}
+        self.profile_warnings.extend(hydrate_profile_data(self, profile_data))
 
     def load_profile(self, profile_id: str = "default") -> None:
         """Load profile data from disk and hydrate runtime managers."""
 
         self.profile_id = str(profile_id or "default")
-        self.profile = self.profile_store.load(self.profile_id)
-        self.profile_warnings = list(self.profile.validation_warnings)
+        self.profile, self.profile_warnings = self.profile_store.load(self.profile_id)
         self._apply_profile_to_global_progression()
-        self._hydrate_from_profile(self.profile.to_dict().get("data", {}))
+        profile_data = self.profile.get("data", {}) if isinstance(self.profile, dict) else {}
+        self._hydrate_from_profile(profile_data)
 
     def _apply_profile_meta_selection(self) -> None:
         """Restore last character selection from profile metadata."""
 
-        meta = self.profile.meta if isinstance(self.profile.meta, dict) else {}
+        profile_data = self.profile.get("data", {}) if isinstance(self.profile, dict) else {}
+        meta = profile_data.get("meta", {}) if isinstance(profile_data, dict) else {}
         last_character = str(meta.get("last_played_character", "") or "")
         if last_character and last_character in self.characters and not self.autoplay:
             self.selected_character = last_character
@@ -5598,7 +5610,8 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
     def _hydrate_player_from_profile(self, player: PlayerCharacter) -> None:
         """Hydrate player progression from the active profile."""
 
-        self._hydrate_from_profile(self.profile.to_dict().get("data", {}), player=player)
+        profile_data = self.profile.get("data", {}) if isinstance(self.profile, dict) else {}
+        self._hydrate_from_profile(profile_data, player=player)
 
     def _hydrate_from_profile(
         self,
@@ -5608,35 +5621,22 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
     ) -> None:
         """Apply profile sections to managers and optionally a player instance."""
 
-        hydrate_profile_data(self, data, player=player)
+        self.profile_warnings.extend(hydrate_profile_data(self, data, player=player))
 
     def _export_profile_data(self) -> dict[str, object]:
         """Export runtime manager state into profile ``data`` sections."""
 
-        player = getattr(self, "player", None)
-        return export_profile_data(self, player=player)
+        return export_profile_data(self)
 
     def save_profile(self) -> None:
         """Persist profile state for exit/checkpoint saves."""
 
         data = self._export_profile_data()
-        snapshot = Profile(
-            schema_version=self.profile.schema_version,
-            created_utc=self.profile.created_utc,
-            updated_utc=self.profile.updated_utc,
-            profile_id=self.profile.profile_id,
-            progression=dict(data.get("progression", {})),
-            inventory=dict(data.get("inventory", {})),
-            economy=dict(data.get("economy", {})),
-            achievements=dict(data.get("achievements", {})),
-            reputation=dict(data.get("reputation", {})),
-            objectives=dict(data.get("objectives", {})),
-            meta=dict(data.get("meta", {})),
-            validation_warnings=[],
-            raw_payload=dict(self.profile.raw_payload),
-        )
-        self.profile_store.save(snapshot)
-        self.profile = snapshot
+        profile = dict(self.profile) if isinstance(self.profile, dict) else {}
+        profile["profile_id"] = self.profile_id
+        profile["data"] = dict(data)
+        self.profile_store.save(self.profile_id, profile)
+        self.profile, self.profile_warnings = self.profile_store.load(self.profile_id)
 
     def _save_profile_checkpoint(self) -> None:
         """Backward-compatible alias for profile persistence calls."""
@@ -7308,10 +7308,8 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
             self.ui_debug_summary_path = str(summary_path) if summary_path else None
         player = getattr(self, "player", None)
         coins = self.coins
-        inventory: dict[str, int] | None = None
         if player is not None:
             coins = player.currency_manager.get_balance()
-            inventory = player.inventory.to_dict()
         self._save_profile_checkpoint()
         mmo_position = self.world_player_manager.get_position(self.mmo_player_id)
         save_settings(
@@ -7387,8 +7385,6 @@ class Game(MenuMixin, GameMMOLogic, GameMMOFlow, GameMMOAutomation, GameMMOUI):
                 "objectives": self.objective_manager.to_dict(),
             }
         )
-        if inventory is not None:
-            save_inventory(inventory)
         if self.mining_enabled:
             self.mining_manager.stop()
         self.mmo_backend.close()
